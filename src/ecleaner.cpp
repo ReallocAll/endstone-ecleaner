@@ -67,6 +67,34 @@ const std::vector<std::string> kDefaultEntityCleanList = {
     "minecraft:phantom",
 };
 
+const std::vector<std::string> kLegacyDefaultItemCleanList = {
+    "Shulker Box",
+    "White Shulker Box",
+    "Light Gray Shulker Box",
+    "Gray Shulker Box",
+    "Black Shulker Box",
+    "Brown Shulker Box",
+    "Red Shulker Box",
+    "Orange Shulker Box",
+    "Yellow Shulker Box",
+    "Lime Shulker Box",
+    "Green Shulker Box",
+    "Cyan Shulker Box",
+    "Light Blue Shulker Box",
+    "Blue Shulker Box",
+    "Purple Shulker Box",
+    "Magenta Shulker Box",
+    "Pink Shulker Box",
+};
+
+const std::vector<std::string> kLegacyDefaultEntityCleanList = {
+    "minecraft:zombie_pigman",
+    "minecraft:zombie",
+    "minecraft:skeleton",
+    "minecraft:bogged",
+    "minecraft:slime",
+};
+
 json make_default_config()
 {
     return {
@@ -129,19 +157,60 @@ void ECleaner::datafile_check() const
         file >> loaded_config;
 
         bool changed = false;
+        const bool legacy_schema = loaded_config.contains("clean_time") || loaded_config.contains("clean_tps");
+
+        if (legacy_schema) {
+            const int legacy_clean_time = std::max(0, loaded_config.value("clean_time", 15));
+
+            // Preserve custom legacy schedules, but convert the upstream 15-minute
+            // default into the new performance-first 10s/60s defaults.
+            if (!loaded_config.contains("item_clean_interval_seconds")) {
+                loaded_config["item_clean_interval_seconds"] =
+                    legacy_clean_time == 15 ? 10 : legacy_clean_time * 60;
+                changed = true;
+            }
+            if (!loaded_config.contains("entity_clean_interval_seconds")) {
+                loaded_config["entity_clean_interval_seconds"] =
+                    legacy_clean_time == 15 ? 60 : legacy_clean_time * 60;
+                changed = true;
+            }
+
+            // The upstream default item whitelist means "delete everything except
+            // shulker boxes". At a 10-second interval that would be far too broad.
+            // Only rewrite it when it is still exactly the upstream default.
+            const bool legacy_default_item_mode = loaded_config.value("item_clean_whitelist", true);
+            const auto legacy_item_list =
+                loaded_config.value("item_clean_list", std::vector<std::string>{});
+            if (legacy_default_item_mode && legacy_item_list == kLegacyDefaultItemCleanList) {
+                loaded_config["item_clean_whitelist"] = false;
+                loaded_config["item_clean_list"] = kDefaultItemCleanList;
+                changed = true;
+            }
+
+            // Likewise, upgrade the untouched upstream entity blacklist to the
+            // new common-hostile-mob policy while preserving customized lists.
+            const bool legacy_default_entity_mode = !loaded_config.value("entity_clean_whitelist", false);
+            const auto legacy_entity_list =
+                loaded_config.value("entity_clean_list", std::vector<std::string>{});
+            if (legacy_default_entity_mode && legacy_entity_list == kLegacyDefaultEntityCleanList) {
+                loaded_config["entity_clean_whitelist"] = false;
+                loaded_config["entity_clean_list"] = kDefaultEntityCleanList;
+                changed = true;
+            }
+
+            if (loaded_config.erase("clean_time") > 0) {
+                changed = true;
+            }
+            if (loaded_config.erase("clean_tps") > 0) {
+                changed = true;
+            }
+        }
+
         for (const auto &[key, value] : defaults.items()) {
             if (!loaded_config.contains(key)) {
                 loaded_config[key] = value;
                 changed = true;
             }
-        }
-
-        // Legacy 0.1.x keys are superseded by independent second-based schedules.
-        if (loaded_config.erase("clean_time") > 0) {
-            changed = true;
-        }
-        if (loaded_config.erase("clean_tps") > 0) {
-            changed = true;
         }
 
         if (changed) {
