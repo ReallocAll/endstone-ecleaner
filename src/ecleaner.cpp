@@ -220,6 +220,74 @@ void migrate_legacy_item_list(json &config, bool &changed)
     changed = true;
 }
 
+bool normalize_config(json &config)
+{
+    const json defaults = make_default_config();
+    bool changed = false;
+
+    const bool has_legacy_schedule =
+        config.contains("clean_time") || config.contains("clean_tps");
+
+    if (has_legacy_schedule) {
+        const int legacy_clean_time = std::clamp(config.value("clean_time", 15), 0, 60);
+
+        // A partially missing upstream 0.1.x item list must not inherit the new
+        // default IDs while retaining whitelist mode, which would invert the
+        // intended performance-first policy and delete almost everything else.
+        if (!config.contains("item_clean_list")
+            && !config.contains("item_clean_ids")
+            && config.value("item_clean_whitelist", true)) {
+            config["item_clean_whitelist"] = false;
+            config["item_clean_ids"] = kDefaultItemCleanIds;
+            config["item_clean_legacy_names"] = json::array();
+            changed = true;
+        }
+
+        // Preserve custom legacy schedules, but convert the untouched upstream
+        // 15-minute default into the new 10s/60s performance-first defaults.
+        if (!config.contains("item_clean_interval_seconds")) {
+            config["item_clean_interval_seconds"] =
+                legacy_clean_time == 15 ? 10 : legacy_clean_time * 60;
+            changed = true;
+        }
+        if (!config.contains("entity_clean_interval_seconds")) {
+            config["entity_clean_interval_seconds"] =
+                legacy_clean_time == 15 ? 60 : legacy_clean_time * 60;
+            changed = true;
+        }
+
+        const bool legacy_default_entity_mode =
+            !config.value("entity_clean_whitelist", false);
+        const bool legacy_entity_list_missing = !config.contains("entity_clean_list");
+        const auto legacy_entity_list =
+            config.value("entity_clean_list", std::vector<std::string>{});
+        if (legacy_default_entity_mode
+            && (legacy_entity_list_missing || legacy_entity_list == kLegacyDefaultEntityCleanList)) {
+            config["entity_clean_whitelist"] = false;
+            config["entity_clean_list"] = kDefaultEntityCleanList;
+            changed = true;
+        }
+
+        if (config.erase("clean_time") > 0) {
+            changed = true;
+        }
+        if (config.erase("clean_tps") > 0) {
+            changed = true;
+        }
+    }
+
+    migrate_legacy_item_list(config, changed);
+
+    for (const auto &[key, value] : defaults.items()) {
+        if (!config.contains(key)) {
+            config[key] = value;
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
 void rebuild_lookup_sets()
 {
     item_clean_id_lookup.clear();
@@ -274,68 +342,7 @@ void ECleaner::datafile_check() const
         json loaded_config;
         file >> loaded_config;
 
-        bool changed = false;
-        const bool has_legacy_schedule =
-            loaded_config.contains("clean_time") || loaded_config.contains("clean_tps");
-
-        if (has_legacy_schedule) {
-            const int legacy_clean_time = std::clamp(loaded_config.value("clean_time", 15), 0, 60);
-
-            // A partially missing upstream 0.1.x item list must not inherit the new
-            // default IDs while retaining whitelist mode, which would invert the
-            // intended performance-first policy and delete almost everything else.
-            if (!loaded_config.contains("item_clean_list")
-                && !loaded_config.contains("item_clean_ids")
-                && loaded_config.value("item_clean_whitelist", true)) {
-                loaded_config["item_clean_whitelist"] = false;
-                loaded_config["item_clean_ids"] = kDefaultItemCleanIds;
-                loaded_config["item_clean_legacy_names"] = json::array();
-                changed = true;
-            }
-
-            // Preserve custom legacy schedules, but convert the untouched upstream
-            // 15-minute default into the new 10s/60s performance-first defaults.
-            if (!loaded_config.contains("item_clean_interval_seconds")) {
-                loaded_config["item_clean_interval_seconds"] =
-                    legacy_clean_time == 15 ? 10 : legacy_clean_time * 60;
-                changed = true;
-            }
-            if (!loaded_config.contains("entity_clean_interval_seconds")) {
-                loaded_config["entity_clean_interval_seconds"] =
-                    legacy_clean_time == 15 ? 60 : legacy_clean_time * 60;
-                changed = true;
-            }
-
-            const bool legacy_default_entity_mode =
-                !loaded_config.value("entity_clean_whitelist", false);
-            const bool legacy_entity_list_missing = !loaded_config.contains("entity_clean_list");
-            const auto legacy_entity_list =
-                loaded_config.value("entity_clean_list", std::vector<std::string>{});
-            if (legacy_default_entity_mode
-                && (legacy_entity_list_missing || legacy_entity_list == kLegacyDefaultEntityCleanList)) {
-                loaded_config["entity_clean_whitelist"] = false;
-                loaded_config["entity_clean_list"] = kDefaultEntityCleanList;
-                changed = true;
-            }
-
-            if (loaded_config.erase("clean_time") > 0) {
-                changed = true;
-            }
-            if (loaded_config.erase("clean_tps") > 0) {
-                changed = true;
-            }
-        }
-
-        migrate_legacy_item_list(loaded_config, changed);
-
-        for (const auto &[key, value] : defaults.items()) {
-            if (!loaded_config.contains(key)) {
-                loaded_config[key] = value;
-                changed = true;
-            }
-        }
-
-        if (changed) {
+        if (normalize_config(loaded_config)) {
             write_json_file(config_path, loaded_config);
             getLogger().info("Migrated ECleaner config to the high-frequency cleanup schema.");
         }
@@ -365,12 +372,16 @@ json ECleaner::read_config() const
 
 bool ECleaner::load_config()
 {
-    const json config = read_config();
+    json config = read_config();
     if (config.contains("error")) {
         return false;
     }
 
     try {
+        if (normalize_config(config)) {
+            write_json_file(config_path, config);
+            getLogger().info("Migrated ECleaner config during reload.");
+        }
         auto_item_clean = config.value("auto_item_clean", true);
         auto_entity_clean = config.value("auto_entity_clean", true);
 
