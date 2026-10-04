@@ -4,108 +4,134 @@
 
 ## Introduction
 
-ECleaner is a lightweight and convenient entity cleaning plugin written in C++.
+ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's 0.2.0 line, the plugin uses a performance-first, high-frequency cleanup model:
 
-## How to Use
+- Dropped items and entities have independent schedules.
+- Intervals are configured in seconds. Defaults are 10 seconds for items and 60 seconds for entities.
+- Scheduled cleanup is silent by default; the old sound and 30-second warning are removed.
+- Default blacklist entries target low-value terrain drops and common hostile mobs.
+- Named entities are protected from automatic entity cleanup.
+- Automatic cleanup is skipped while the server has no online players.
+- TPS-triggered cleanup is removed to avoid startup/warm-up false positives.
 
-> Installation & Configuration
+## Installation
 
-* Install Endstone
+Place the plugin binary in the Endstone server's `plugins` directory. On first startup ECleaner creates:
 
-Please refer to the Endstone documentation for this step.
+```text
+plugins/ecleaner/config.json
+```
 
-* Download & Install ECleaner Plugin
+Language files live under:
 
-> Windows Platform
+```text
+plugins/ecleaner/language/
+```
 
-Go to the Releases page to download the latest Windows version compressed package, and then extract the files in it to the server's `plugins` directory.
-
-> Linux Platform
-
-Go to the Releases page to download the latest Linux version compressed package, and then extract the files in it to the server's `plugins` directory.
-
-* Configuration
-
-After running the plugin for the first time, an `ecleaner` folder will be automatically created in the `plugins` directory, containing the configuration file `config.json`.
-The default configuration of the configuration file is as follows:
+## Default configuration
 
 ```json
 {
-    "auto_entity_clean": true,
+    "language": "zh_CN",
     "auto_item_clean": true,
-    "clean_time": 15,
-    "clean_tps": 16,
-    "entity_clean_list": [
-        "minecraft:zombie_pigman",
-        "minecraft:zombie",
-        "minecraft:skeleton",
-        "minecraft:bogged",
-        "minecraft:slime"
+    "auto_entity_clean": true,
+    "item_clean_interval_seconds": 10,
+    "entity_clean_interval_seconds": 60,
+    "broadcast_cleanup_results": false,
+    "item_clean_whitelist": false,
+    "item_clean_list": [
+        "Netherrack",
+        "Cobblestone",
+        "Cobbled Deepslate",
+        "Stone",
+        "Deepslate",
+        "Dirt",
+        "Grass Block",
+        "Gravel",
+        "Tuff",
+        "Granite",
+        "Diorite",
+        "Andesite",
+        "Calcite",
+        "Basalt",
+        "Blackstone",
+        "End Stone",
+        "Sandstone",
+        "Red Sandstone"
     ],
     "entity_clean_whitelist": false,
-    "item_clean_list": [
-        "Shulker Box",
-        "White Shulker Box",
-        "Light Gray Shulker Box",
-        "Gray Shulker Box",
-        "Black Shulker Box",
-        "Brown Shulker Box",
-        "Red Shulker Box",
-        "Orange Shulker Box",
-        "Yellow Shulker Box",
-        "Lime Shulker Box",
-        "Green Shulker Box",
-        "Cyan Shulker Box",
-        "Light Blue Shulker Box",
-        "Blue Shulker Box",
-        "Purple Shulker Box",
-        "Magenta Shulker Box",
-        "Pink Shulker Box"
-    ],
-    "item_clean_whitelist": true
+    "entity_clean_list": [
+        "minecraft:zombie",
+        "minecraft:skeleton",
+        "minecraft:creeper",
+        "minecraft:spider",
+        "minecraft:husk",
+        "minecraft:drowned",
+        "minecraft:stray",
+        "minecraft:bogged",
+        "minecraft:phantom"
+    ]
 }
 ```
 
-`auto_entity_clean`: This option controls automatic entity cleaning. When set to `true`, automatic entity cleaning is enabled. When set to `false`, it is disabled. When enabled, entities will be cleaned during scheduled cleaning, when the TPS is too low, and when the `/ecl clean` command is executed. When disabled, entities will not be cleaned automatically.
+### Options
 
-`auto_item_clean`: This option controls automatic item cleaning. When set to `true`, automatic item cleaning is enabled. When set to `false`, it is disabled. When enabled, dropped items will be cleaned during scheduled cleaning, when the TPS is too low, and when the `/ecl clean` command is executed. When disabled, dropped items will not be cleaned automatically.
+`auto_item_clean`: Enables scheduled dropped-item cleanup.
 
-`clean_time`: This is the time interval for scheduled entity cleaning, in minutes. Setting it to `0` disables scheduled cleaning.
+`auto_entity_clean`: Enables scheduled entity cleanup.
 
-`clean_tps`: This is the minimum average TPS value of the server that triggers automatic cleaning. When the server's average TPS drops below this value, an automatic cleaning will be triggered.
+`item_clean_interval_seconds`: Item cleanup interval in seconds. Set to `0` to disable scheduled item cleanup.
 
-`entity_clean_list`: This is the entity cleaning list. It acts as either a whitelist or a blacklist depending on the entity cleaning list mode. The content of the list is the entity ID.
+`entity_clean_interval_seconds`: Entity cleanup interval in seconds. Set to `0` to disable scheduled entity cleanup.
 
-`entity_clean_whitelist`: This option determines the entity cleaning mode. When set to `true`, it is the entity cleaning whitelist mode. When set to `false`, it is the entity cleaning blacklist mode. When the entity cleaning list mode is whitelist, entities not in the list will be automatically cleaned; when it is blacklist, only entities in the list will be cleaned. The default configuration is blacklist.
+`broadcast_cleanup_results`: Broadcast scheduled cleanup counts to all players. Defaults to `false`.
 
-`item_clean_list`: This is the dropped item cleaning list. It acts as either a whitelist or a blacklist depending on the dropped item cleaning list mode. The content of the list is the English name of the dropped item, not the ID.
+`item_clean_whitelist`: When `false`, only items in `item_clean_list` are removed. When `true`, listed items are preserved and other dropped items are removed.
 
-`item_clean_whitelist`: This option determines the dropped item cleaning mode. When set to `true`, it is the dropped item cleaning whitelist mode. When set to `false`, it is the dropped item cleaning blacklist mode. When the dropped item cleaning list mode is whitelist, dropped items not in the list will be automatically cleaned; when it is blacklist, only dropped items in the list will be cleaned. The default configuration is whitelist.
+`item_clean_list`: Uses dropped-item English display names rather than item IDs.
 
-> Command Usage
+`entity_clean_whitelist`: When `false`, only entities in `entity_clean_list` are removed. When `true`, listed entities are preserved and other unnamed entities are removed.
 
-**Command List (All commands are administrator-only)**
+`entity_clean_list`: Uses entity IDs such as `minecraft:zombie`.
 
-```shell
+Automatic entity cleanup skips entities with a custom NameTag.
+
+## Commands
+
+All commands are operator-only by default.
+
+```text
 /ecl
 ```
 
-Open the plugin configuration management menu, where you can manage plugin configurations other than the entity and item lists.
+Open the configuration form.
 
-```shell
+```text
 /ecl clean
 ```
 
-Manually execute a cleaning operation. The cleaning configuration is the same as the automatic cleaning configuration.
+Immediately run the currently enabled item/entity cleaners.
 
-```shell
+```text
 /ecl clean item
 ```
 
-Manually execute dropped item cleaning.
+Immediately run dropped-item cleanup.
 
-```shell
+```text
 /ecl clean entity
 ```
 
-Manually execute entity cleaning.
+Immediately run entity cleanup.
+
+```text
+/ecl reload
+```
+
+Reload configuration and safely cancel/recreate both scheduled tasks.
+
+## Upgrading from 0.1.x
+
+0.2.0 removes the legacy `clean_time` and `clean_tps` keys and adds independent second-based intervals. Existing blacklist/whitelist settings and list contents are preserved during migration.
+
+To use the new performance-first default lists, remove the old `plugins/ecleaner/config.json` and restart the server.
