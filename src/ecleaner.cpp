@@ -12,6 +12,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 translate Tran;
@@ -116,14 +117,27 @@ json make_default_config()
     };
 }
 
-bool is_listed(const std::vector<std::string> &list, const std::string &value)
+std::unordered_set<std::string> item_clean_lookup;
+std::unordered_set<std::string> entity_clean_lookup;
+
+void rebuild_lookup_sets()
 {
-    return std::find(list.begin(), list.end(), value) != list.end();
+    item_clean_lookup.clear();
+    item_clean_lookup.reserve(item_clean_list.size());
+    item_clean_lookup.insert(item_clean_list.begin(), item_clean_list.end());
+
+    entity_clean_lookup.clear();
+    entity_clean_lookup.reserve(entity_clean_list.size());
+    entity_clean_lookup.insert(entity_clean_list.begin(), entity_clean_list.end());
 }
 
-bool should_clean(bool whitelist_mode, const std::vector<std::string> &list, const std::string &value)
+bool should_clean(
+    bool whitelist_mode,
+    const std::unordered_set<std::string> &lookup,
+    const std::string &value
+)
 {
-    const bool listed = is_listed(list, value);
+    const bool listed = lookup.contains(value);
     return whitelist_mode ? !listed : listed;
 }
 
@@ -271,6 +285,8 @@ bool ECleaner::load_config()
         entity_clean_interval_seconds = std::clamp(config.value("entity_clean_interval_seconds", 60), 0, 3600);
         broadcast_cleanup_results = config.value("broadcast_cleanup_results", false);
 
+        rebuild_lookup_sets();
+
         const std::string language = config.value("language", std::string("zh_CN"));
         language_file = language_path + language + ".json";
         Tran = translate(language_file);
@@ -293,7 +309,7 @@ int ECleaner::clean_item() const
             continue;
         }
 
-        if (should_clean(item_clean_whitelist, item_clean_list, actor->getName())) {
+        if (should_clean(item_clean_whitelist, item_clean_lookup, actor->getName())) {
             actor->remove();
             ++total_clean_num;
         }
@@ -316,7 +332,7 @@ int ECleaner::clean_entity() const
             continue;
         }
 
-        if (should_clean(entity_clean_whitelist, entity_clean_list, actor->getType())) {
+        if (should_clean(entity_clean_whitelist, entity_clean_lookup, actor->getType())) {
             actor->remove();
             ++total_clean_num;
         }
@@ -396,6 +412,7 @@ void ECleaner::onEnable()
         getLogger().warning("ECleaner config could not be loaded; using in-memory defaults.");
         item_clean_list = kDefaultItemCleanList;
         entity_clean_list = kDefaultEntityCleanList;
+        rebuild_lookup_sets();
     }
 
     schedule_cleanup_tasks();
