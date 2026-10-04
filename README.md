@@ -132,6 +132,10 @@ Reload configuration and safely cancel/recreate both scheduled tasks.
 
 ## Upgrading from 0.1.x
 
-0.2.0 removes the legacy `clean_time` and `clean_tps` keys and adds independent second-based intervals. Existing blacklist/whitelist settings and list contents are preserved during migration.
+0.2.0 removes the legacy `clean_time` and `clean_tps` keys and adds independent second-based intervals.
 
-To use the new performance-first default lists, remove the old `plugins/ecleaner/config.json` and restart the server.
+- An untouched 0.1.x default config is migrated to the new performance-first defaults: 10 seconds for items and 60 seconds for entities. The old shulker-box whitelist is also replaced with the low-value item blacklist so high-frequency cleanup does not delete almost every dropped item.
+- A customized legacy `clean_time` is converted from minutes to seconds and applied to both new schedules; `clean_time = 0` remains disabled.
+- Customized blacklist/whitelist modes and list contents are preserved.
+
+If the old config is no longer useful, remove `plugins/ecleaner/config.json` and restart to regenerate the 0.2.0 defaults.
