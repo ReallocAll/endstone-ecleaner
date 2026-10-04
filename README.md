@@ -7,7 +7,7 @@
 ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's 0.2.0 line, the plugin uses a performance-first, high-frequency cleanup model:
 
 - Dropped items and entities have independent schedules.
-- Intervals are configured in seconds. Defaults are 10 seconds for items and 60 seconds for entities.
+- Intervals are configured in seconds as pressure-check intervals. Defaults are 10 seconds for items and 60 seconds for entities; actual deletion only happens when the MSPT gate passes.
 - Scheduled cleanup is silent by default; the old sound and 30-second warning are removed.
 - Default blacklist entries target low-value terrain drops and common hostile mobs.
 - Named entities are protected from automatic entity cleanup.
@@ -90,9 +90,9 @@ plugins/ecleaner/language/
 
 `auto_entity_clean`: Enables scheduled entity cleanup.
 
-`item_clean_interval_seconds`: Item cleanup interval in seconds. Set to `0` to disable scheduled item cleanup.
+`item_clean_interval_seconds`: Item cleanup pressure-check interval in seconds. By default ECleaner checks MSPT every 10 seconds and only deletes items when the threshold is met. Set to `0` to disable scheduled item cleanup.
 
-`entity_clean_interval_seconds`: Entity cleanup interval in seconds. Set to `0` to disable scheduled entity cleanup.
+`entity_clean_interval_seconds`: Entity cleanup pressure-check interval in seconds. By default ECleaner checks MSPT every 60 seconds and only deletes entities when the threshold is met. Set to `0` to disable scheduled entity cleanup.
 
 `broadcast_cleanup_results`: Broadcast scheduled cleanup counts to all players. Defaults to `false`.
 
