@@ -18,6 +18,17 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(endstone)
 
 FetchContent_Declare(
+        endstone_papi_headers
+        GIT_REPOSITORY https://github.com/EndstoneMC/papi.git
+        GIT_TAG v0.1.0
+        GIT_SHALLOW TRUE
+)
+FetchContent_GetProperties(endstone_papi_headers)
+if(NOT endstone_papi_headers_POPULATED)
+    FetchContent_Populate(endstone_papi_headers)
+endif()
+
+FetchContent_Declare(
         nlohmann_json
         GIT_REPOSITORY https://github.com/nlohmann/json.git
         GIT_TAG master
@@ -35,7 +46,9 @@ FetchContent_MakeAvailable(fmt)
 endstone_add_plugin(${PROJECT_NAME} src/ecleaner.cpp)
 
 target_include_directories(${PROJECT_NAME}
-        PRIVATE ${CMAKE_SOURCE_DIR}/include
+        PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${endstone_papi_headers_SOURCE_DIR}/include
         )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json fmt::fmt-header-only)
@@ -82,7 +95,7 @@ else()
 endif()
 
 # 基础版本（主版本号）
-set(BASE_VERSION "0.2.0")
+set(BASE_VERSION "0.2.1")
 
 # 检查是否为正式发布版本
 if(RELEASE_VERSION)
