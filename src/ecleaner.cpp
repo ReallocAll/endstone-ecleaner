@@ -231,6 +231,8 @@ void migrate_legacy_item_list(json &config, bool &changed)
     changed = true;
 }
 
+std::optional<std::size_t> mspt_statistic_index(std::string_view statistic);
+
 bool normalize_config(json &config)
 {
     const json defaults = make_default_config();
