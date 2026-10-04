@@ -12,7 +12,8 @@ ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's
 - Default blacklist entries target low-value terrain drops and common hostile mobs.
 - Named entities are protected from automatic entity cleanup.
 - Automatic cleanup is skipped while the server has no online players.
-- TPS-triggered cleanup is removed to avoid startup/warm-up false positives.
+- Scheduled cleanup is gated by Spark MSPT pressure: by default it only runs when the 10-second p95 MSPT is at least 50 ms.
+- MSPT is read from Spark through Endstone PAPI. If PAPI/Spark is unavailable or the MSPT value is unresolved, automatic cleanup fails closed and skips deletion.
 
 ## Installation
 
@@ -38,6 +39,9 @@ plugins/ecleaner/language/
     "item_clean_interval_seconds": 10,
     "entity_clean_interval_seconds": 60,
     "broadcast_cleanup_results": false,
+    "mspt_threshold": 50.0,
+    "mspt_window": "10s",
+    "mspt_statistic": "p95",
     "item_clean_whitelist": false,
     "item_clean_ids": [
         "minecraft:netherrack",
@@ -92,6 +96,12 @@ plugins/ecleaner/language/
 
 `broadcast_cleanup_results`: Broadcast scheduled cleanup counts to all players. Defaults to `false`.
 
+`mspt_threshold`: Automatic-cleanup pressure threshold in milliseconds. Defaults to `50.0`. Scheduled cleanup only runs when the selected Spark MSPT statistic is at or above this value. Set it to `0` to disable the MSPT gate and restore unconditional interval-based cleanup.
+
+`mspt_window`: Spark MSPT window, either `10s` or `1m`. Defaults to `10s`.
+
+`mspt_statistic`: Which value from Spark's `{spark:tickduration_*}` distribution to compare: `min`, `median`, `p95`, or `max`. Defaults to `p95`, so the default policy is “10-second p95 MSPT >= 50 ms”.
+
 `item_clean_whitelist`: When `false`, only items in `item_clean_list` are removed. When `true`, listed items are preserved and other dropped items are removed.
 
 `item_clean_ids`: Uses stable ItemType IDs such as `minecraft:netherrack`; matching no longer depends on an English display name or client language.
@@ -103,6 +113,8 @@ plugins/ecleaner/language/
 `entity_clean_list`: Uses entity IDs such as `minecraft:zombie`.
 
 Automatic entity cleanup skips entities with a custom NameTag.
+
+Scheduled cleanup depends on `papi` and `spark`. If either is missing, PAPI is inactive, the Spark expansion is not registered, the placeholder has no usable samples yet, or the returned value cannot be parsed, scheduled cleanup is skipped. Manual operator commands (`/ecl clean`, `/ecl clean item`, `/ecl clean entity`) bypass the MSPT gate.
 
 ## Commands
 
