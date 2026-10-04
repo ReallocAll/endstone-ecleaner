@@ -401,7 +401,7 @@ void ECleaner::onEnable()
     schedule_cleanup_tasks();
 
     getLogger().info(
-        "ECleaner " + getServer().getPluginManager().getPlugin("ecleaner")->getDescription().getVersion()
+        "ECleaner " + getDescription().getVersion()
         + " enabled: item interval=" + std::to_string(item_clean_interval_seconds)
         + "s, entity interval=" + std::to_string(entity_clean_interval_seconds) + "s."
     );
