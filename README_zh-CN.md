@@ -39,26 +39,27 @@ plugins/ecleaner/language/
     "entity_clean_interval_seconds": 60,
     "broadcast_cleanup_results": false,
     "item_clean_whitelist": false,
-    "item_clean_list": [
-        "Netherrack",
-        "Cobblestone",
-        "Cobbled Deepslate",
-        "Stone",
-        "Deepslate",
-        "Dirt",
-        "Grass Block",
-        "Gravel",
-        "Tuff",
-        "Granite",
-        "Diorite",
-        "Andesite",
-        "Calcite",
-        "Basalt",
-        "Blackstone",
-        "End Stone",
-        "Sandstone",
-        "Red Sandstone"
+    "item_clean_ids": [
+        "minecraft:netherrack",
+        "minecraft:cobblestone",
+        "minecraft:cobbled_deepslate",
+        "minecraft:stone",
+        "minecraft:deepslate",
+        "minecraft:dirt",
+        "minecraft:grass_block",
+        "minecraft:gravel",
+        "minecraft:tuff",
+        "minecraft:granite",
+        "minecraft:diorite",
+        "minecraft:andesite",
+        "minecraft:calcite",
+        "minecraft:basalt",
+        "minecraft:blackstone",
+        "minecraft:end_stone",
+        "minecraft:sandstone",
+        "minecraft:red_sandstone"
     ],
+    "item_clean_legacy_names": [],
     "entity_clean_whitelist": false,
     "entity_clean_list": [
         "minecraft:zombie",
@@ -93,7 +94,9 @@ plugins/ecleaner/language/
 
 `item_clean_whitelist`：掉落物名单模式。为 `false` 时只有名单内物品会被删除；为 `true` 时名单内物品被保留、其他掉落物会被删除。
 
-`item_clean_list`：掉落物名单，使用掉落物英文显示名，而不是物品 ID。
+`item_clean_ids`：掉落物名单，使用稳定的 ItemType ID，例如 `minecraft:netherrack`。不再依赖客户端语言或英文显示名。
+
+`item_clean_legacy_names`：仅用于兼容旧版无法映射的英文显示名。新配置通常保持为空。
 
 `entity_clean_whitelist`：实体名单模式。为 `false` 时只有名单内实体会被删除；为 `true` 时名单内实体被保留、其他实体会被删除。
 
@@ -141,6 +144,6 @@ plugins/ecleaner/language/
 
 - 如果检测到**完全未修改的 0.1.x 默认配置**，会自动迁移到新的性能优先默认值：掉落物 10 秒、实体 60 秒，并把旧的“潜影盒白名单”改为低价值掉落物黑名单，避免 10 秒一次误删几乎所有掉落物。
 - 如果旧的 `clean_time` 被手动修改过，则会按原分钟数换算成秒并同时用于两个新定时器；`clean_time = 0` 会继续保持关闭。
-- 自定义过的黑/白名单与名单内容会原样保留，不会被强制覆盖。
+- 自定义过的黑/白名单与名单内容会尽量保留。旧 `item_clean_list` 会自动转换为稳定 ItemType ID；无法识别的自定义英文名会保存在 `item_clean_legacy_names` 中继续兼容。
 
 如果配置已经比较混乱，删除旧的 `plugins/ecleaner/config.json` 后重启即可重新生成 0.2.0 默认配置。
