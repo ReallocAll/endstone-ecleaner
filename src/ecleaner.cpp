@@ -165,7 +165,7 @@ void ECleaner::datafile_check() const
         const bool legacy_schema = loaded_config.contains("clean_time") || loaded_config.contains("clean_tps");
 
         if (legacy_schema) {
-            const int legacy_clean_time = std::max(0, loaded_config.value("clean_time", 15));
+            const int legacy_clean_time = std::clamp(loaded_config.value("clean_time", 15), 0, 60);
 
             // Preserve custom legacy schedules, but convert the upstream 15-minute
             // default into the new performance-first 10s/60s defaults.
@@ -184,9 +184,11 @@ void ECleaner::datafile_check() const
             // shulker boxes". At a 10-second interval that would be far too broad.
             // Only rewrite it when it is still exactly the upstream default.
             const bool legacy_default_item_mode = loaded_config.value("item_clean_whitelist", true);
+            const bool legacy_item_list_missing = !loaded_config.contains("item_clean_list");
             const auto legacy_item_list =
                 loaded_config.value("item_clean_list", std::vector<std::string>{});
-            if (legacy_default_item_mode && legacy_item_list == kLegacyDefaultItemCleanList) {
+            if (legacy_default_item_mode
+                && (legacy_item_list_missing || legacy_item_list == kLegacyDefaultItemCleanList)) {
                 loaded_config["item_clean_whitelist"] = false;
                 loaded_config["item_clean_list"] = kDefaultItemCleanList;
                 changed = true;
@@ -195,9 +197,11 @@ void ECleaner::datafile_check() const
             // Likewise, upgrade the untouched upstream entity blacklist to the
             // new common-hostile-mob policy while preserving customized lists.
             const bool legacy_default_entity_mode = !loaded_config.value("entity_clean_whitelist", false);
+            const bool legacy_entity_list_missing = !loaded_config.contains("entity_clean_list");
             const auto legacy_entity_list =
                 loaded_config.value("entity_clean_list", std::vector<std::string>{});
-            if (legacy_default_entity_mode && legacy_entity_list == kLegacyDefaultEntityCleanList) {
+            if (legacy_default_entity_mode
+                && (legacy_entity_list_missing || legacy_entity_list == kLegacyDefaultEntityCleanList)) {
                 loaded_config["entity_clean_whitelist"] = false;
                 loaded_config["entity_clean_list"] = kDefaultEntityCleanList;
                 changed = true;
