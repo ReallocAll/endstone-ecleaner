@@ -281,6 +281,18 @@ void ECleaner::datafile_check() const
         if (has_legacy_schedule) {
             const int legacy_clean_time = std::clamp(loaded_config.value("clean_time", 15), 0, 60);
 
+            // A partially missing upstream 0.1.x item list must not inherit the new
+            // default IDs while retaining whitelist mode, which would invert the
+            // intended performance-first policy and delete almost everything else.
+            if (!loaded_config.contains("item_clean_list")
+                && !loaded_config.contains("item_clean_ids")
+                && loaded_config.value("item_clean_whitelist", true)) {
+                loaded_config["item_clean_whitelist"] = false;
+                loaded_config["item_clean_ids"] = kDefaultItemCleanIds;
+                loaded_config["item_clean_legacy_names"] = json::array();
+                changed = true;
+            }
+
             // Preserve custom legacy schedules, but convert the untouched upstream
             // 15-minute default into the new 10s/60s performance-first defaults.
             if (!loaded_config.contains("item_clean_interval_seconds")) {
