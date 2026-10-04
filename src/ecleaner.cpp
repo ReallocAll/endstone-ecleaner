@@ -10,8 +10,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -26,7 +28,8 @@ std::shared_ptr<endstone::Task> entity_clean_task;
 bool auto_item_clean = true;
 bool auto_entity_clean = true;
 bool item_clean_whitelist = false;
-std::vector<std::string> item_clean_list;
+std::vector<std::string> item_clean_ids;
+std::vector<std::string> item_clean_legacy_names;
 bool entity_clean_whitelist = false;
 std::vector<std::string> entity_clean_list;
 int item_clean_interval_seconds = 10;
@@ -35,25 +38,25 @@ bool broadcast_cleanup_results = false;
 
 namespace {
 
-const std::vector<std::string> kDefaultItemCleanList = {
-    "Netherrack",
-    "Cobblestone",
-    "Cobbled Deepslate",
-    "Stone",
-    "Deepslate",
-    "Dirt",
-    "Grass Block",
-    "Gravel",
-    "Tuff",
-    "Granite",
-    "Diorite",
-    "Andesite",
-    "Calcite",
-    "Basalt",
-    "Blackstone",
-    "End Stone",
-    "Sandstone",
-    "Red Sandstone",
+const std::vector<std::string> kDefaultItemCleanIds = {
+    "minecraft:netherrack",
+    "minecraft:cobblestone",
+    "minecraft:cobbled_deepslate",
+    "minecraft:stone",
+    "minecraft:deepslate",
+    "minecraft:dirt",
+    "minecraft:grass_block",
+    "minecraft:gravel",
+    "minecraft:tuff",
+    "minecraft:granite",
+    "minecraft:diorite",
+    "minecraft:andesite",
+    "minecraft:calcite",
+    "minecraft:basalt",
+    "minecraft:blackstone",
+    "minecraft:end_stone",
+    "minecraft:sandstone",
+    "minecraft:red_sandstone",
 };
 
 const std::vector<std::string> kDefaultEntityCleanList = {
@@ -70,6 +73,7 @@ const std::vector<std::string> kDefaultEntityCleanList = {
     "minecraft:slime",
     "minecraft:magma_cube",
     "minecraft:zombie_pigman",
+    "minecraft:zombified_piglin",
     "minecraft:phantom",
 };
 
@@ -101,6 +105,48 @@ const std::vector<std::string> kLegacyDefaultEntityCleanList = {
     "minecraft:slime",
 };
 
+const std::unordered_map<std::string, std::string> kLegacyItemNameToId = {
+    {"Netherrack", "minecraft:netherrack"},
+    {"Cobblestone", "minecraft:cobblestone"},
+    {"Cobbled Deepslate", "minecraft:cobbled_deepslate"},
+    {"Stone", "minecraft:stone"},
+    {"Deepslate", "minecraft:deepslate"},
+    {"Dirt", "minecraft:dirt"},
+    {"Grass Block", "minecraft:grass_block"},
+    {"Gravel", "minecraft:gravel"},
+    {"Tuff", "minecraft:tuff"},
+    {"Granite", "minecraft:granite"},
+    {"Diorite", "minecraft:diorite"},
+    {"Andesite", "minecraft:andesite"},
+    {"Calcite", "minecraft:calcite"},
+    {"Basalt", "minecraft:basalt"},
+    {"Blackstone", "minecraft:blackstone"},
+    {"End Stone", "minecraft:end_stone"},
+    {"Sandstone", "minecraft:sandstone"},
+    {"Red Sandstone", "minecraft:red_sandstone"},
+    {"Shulker Box", "minecraft:shulker_box"},
+    {"White Shulker Box", "minecraft:white_shulker_box"},
+    {"Light Gray Shulker Box", "minecraft:light_gray_shulker_box"},
+    {"Gray Shulker Box", "minecraft:gray_shulker_box"},
+    {"Black Shulker Box", "minecraft:black_shulker_box"},
+    {"Brown Shulker Box", "minecraft:brown_shulker_box"},
+    {"Red Shulker Box", "minecraft:red_shulker_box"},
+    {"Orange Shulker Box", "minecraft:orange_shulker_box"},
+    {"Yellow Shulker Box", "minecraft:yellow_shulker_box"},
+    {"Lime Shulker Box", "minecraft:lime_shulker_box"},
+    {"Green Shulker Box", "minecraft:green_shulker_box"},
+    {"Cyan Shulker Box", "minecraft:cyan_shulker_box"},
+    {"Light Blue Shulker Box", "minecraft:light_blue_shulker_box"},
+    {"Blue Shulker Box", "minecraft:blue_shulker_box"},
+    {"Purple Shulker Box", "minecraft:purple_shulker_box"},
+    {"Magenta Shulker Box", "minecraft:magenta_shulker_box"},
+    {"Pink Shulker Box", "minecraft:pink_shulker_box"},
+};
+
+std::unordered_set<std::string> item_clean_id_lookup;
+std::unordered_set<std::string> item_clean_legacy_name_lookup;
+std::unordered_set<std::string> entity_clean_lookup;
+
 json make_default_config()
 {
     return {
@@ -111,33 +157,86 @@ json make_default_config()
         {"entity_clean_interval_seconds", 60},
         {"broadcast_cleanup_results", false},
         {"item_clean_whitelist", false},
-        {"item_clean_list", kDefaultItemCleanList},
+        {"item_clean_ids", kDefaultItemCleanIds},
+        {"item_clean_legacy_names", json::array()},
         {"entity_clean_whitelist", false},
         {"entity_clean_list", kDefaultEntityCleanList},
     };
 }
 
-std::unordered_set<std::string> item_clean_lookup;
-std::unordered_set<std::string> entity_clean_lookup;
+std::optional<std::string> legacy_item_name_to_id(const std::string &value)
+{
+    if (value.rfind("minecraft:", 0) == 0) {
+        return value;
+    }
+
+    const auto it = kLegacyItemNameToId.find(value);
+    if (it == kLegacyItemNameToId.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+void migrate_legacy_item_list(json &config, bool &changed)
+{
+    if (!config.contains("item_clean_list")) {
+        return;
+    }
+
+    const auto legacy_names = config.value("item_clean_list", std::vector<std::string>{});
+    const bool legacy_default_mode = config.value("item_clean_whitelist", true);
+
+    if (!config.contains("item_clean_ids")) {
+        if (legacy_default_mode && legacy_names == kLegacyDefaultItemCleanList) {
+            // Upstream 0.1.x default: preserve shulker boxes and delete everything else.
+            // That policy is unsafe at a 10-second interval, so move untouched defaults
+            // to the new performance-first terrain-waste blacklist.
+            config["item_clean_whitelist"] = false;
+            config["item_clean_ids"] = kDefaultItemCleanIds;
+            config["item_clean_legacy_names"] = json::array();
+        }
+        else {
+            std::vector<std::string> migrated_ids;
+            std::vector<std::string> unknown_names;
+
+            migrated_ids.reserve(legacy_names.size());
+            unknown_names.reserve(legacy_names.size());
+
+            for (const auto &name : legacy_names) {
+                if (const auto id = legacy_item_name_to_id(name)) {
+                    migrated_ids.push_back(*id);
+                }
+                else {
+                    unknown_names.push_back(name);
+                }
+            }
+
+            config["item_clean_ids"] = migrated_ids;
+            config["item_clean_legacy_names"] = unknown_names;
+        }
+    }
+
+    config.erase("item_clean_list");
+    changed = true;
+}
 
 void rebuild_lookup_sets()
 {
-    item_clean_lookup.clear();
-    item_clean_lookup.reserve(item_clean_list.size());
-    item_clean_lookup.insert(item_clean_list.begin(), item_clean_list.end());
+    item_clean_id_lookup.clear();
+    item_clean_id_lookup.reserve(item_clean_ids.size());
+    item_clean_id_lookup.insert(item_clean_ids.begin(), item_clean_ids.end());
+
+    item_clean_legacy_name_lookup.clear();
+    item_clean_legacy_name_lookup.reserve(item_clean_legacy_names.size());
+    item_clean_legacy_name_lookup.insert(item_clean_legacy_names.begin(), item_clean_legacy_names.end());
 
     entity_clean_lookup.clear();
     entity_clean_lookup.reserve(entity_clean_list.size());
     entity_clean_lookup.insert(entity_clean_list.begin(), entity_clean_list.end());
 }
 
-bool should_clean(
-    bool whitelist_mode,
-    const std::unordered_set<std::string> &lookup,
-    const std::string &value
-)
+bool should_clean(bool whitelist_mode, bool listed)
 {
-    const bool listed = lookup.contains(value);
     return whitelist_mode ? !listed : listed;
 }
 
@@ -176,13 +275,14 @@ void ECleaner::datafile_check() const
         file >> loaded_config;
 
         bool changed = false;
-        const bool legacy_schema = loaded_config.contains("clean_time") || loaded_config.contains("clean_tps");
+        const bool has_legacy_schedule =
+            loaded_config.contains("clean_time") || loaded_config.contains("clean_tps");
 
-        if (legacy_schema) {
+        if (has_legacy_schedule) {
             const int legacy_clean_time = std::clamp(loaded_config.value("clean_time", 15), 0, 60);
 
-            // Preserve custom legacy schedules, but convert the upstream 15-minute
-            // default into the new performance-first 10s/60s defaults.
+            // Preserve custom legacy schedules, but convert the untouched upstream
+            // 15-minute default into the new 10s/60s performance-first defaults.
             if (!loaded_config.contains("item_clean_interval_seconds")) {
                 loaded_config["item_clean_interval_seconds"] =
                     legacy_clean_time == 15 ? 10 : legacy_clean_time * 60;
@@ -194,23 +294,8 @@ void ECleaner::datafile_check() const
                 changed = true;
             }
 
-            // The upstream default item whitelist means "delete everything except
-            // shulker boxes". At a 10-second interval that would be far too broad.
-            // Only rewrite it when it is still exactly the upstream default.
-            const bool legacy_default_item_mode = loaded_config.value("item_clean_whitelist", true);
-            const bool legacy_item_list_missing = !loaded_config.contains("item_clean_list");
-            const auto legacy_item_list =
-                loaded_config.value("item_clean_list", std::vector<std::string>{});
-            if (legacy_default_item_mode
-                && (legacy_item_list_missing || legacy_item_list == kLegacyDefaultItemCleanList)) {
-                loaded_config["item_clean_whitelist"] = false;
-                loaded_config["item_clean_list"] = kDefaultItemCleanList;
-                changed = true;
-            }
-
-            // Likewise, upgrade the untouched upstream entity blacklist to the
-            // new common-hostile-mob policy while preserving customized lists.
-            const bool legacy_default_entity_mode = !loaded_config.value("entity_clean_whitelist", false);
+            const bool legacy_default_entity_mode =
+                !loaded_config.value("entity_clean_whitelist", false);
             const bool legacy_entity_list_missing = !loaded_config.contains("entity_clean_list");
             const auto legacy_entity_list =
                 loaded_config.value("entity_clean_list", std::vector<std::string>{});
@@ -228,6 +313,8 @@ void ECleaner::datafile_check() const
                 changed = true;
             }
         }
+
+        migrate_legacy_item_list(loaded_config, changed);
 
         for (const auto &[key, value] : defaults.items()) {
             if (!loaded_config.contains(key)) {
@@ -278,11 +365,15 @@ bool ECleaner::load_config()
         item_clean_whitelist = config.value("item_clean_whitelist", false);
         entity_clean_whitelist = config.value("entity_clean_whitelist", false);
 
-        item_clean_list = config.value("item_clean_list", kDefaultItemCleanList);
+        item_clean_ids = config.value("item_clean_ids", kDefaultItemCleanIds);
+        item_clean_legacy_names =
+            config.value("item_clean_legacy_names", std::vector<std::string>{});
         entity_clean_list = config.value("entity_clean_list", kDefaultEntityCleanList);
 
-        item_clean_interval_seconds = std::clamp(config.value("item_clean_interval_seconds", 10), 0, 3600);
-        entity_clean_interval_seconds = std::clamp(config.value("entity_clean_interval_seconds", 60), 0, 3600);
+        item_clean_interval_seconds =
+            std::clamp(config.value("item_clean_interval_seconds", 10), 0, 3600);
+        entity_clean_interval_seconds =
+            std::clamp(config.value("entity_clean_interval_seconds", 60), 0, 3600);
         broadcast_cleanup_results = config.value("broadcast_cleanup_results", false);
 
         rebuild_lookup_sets();
@@ -305,11 +396,20 @@ int ECleaner::clean_item() const
     int total_clean_num = 0;
 
     for (const auto &actor : getServer().getLevel()->getActors()) {
-        if (actor->getType() != "minecraft:item") {
+        auto *item = actor->asItem();
+        if (item == nullptr) {
             continue;
         }
 
-        if (should_clean(item_clean_whitelist, item_clean_lookup, actor->getName())) {
+        const auto stack = item->getItemStack();
+        const std::string item_id = static_cast<std::string>(stack.getType().getId());
+
+        bool listed = item_clean_id_lookup.contains(item_id);
+        if (!listed && !item_clean_legacy_name_lookup.empty()) {
+            listed = item_clean_legacy_name_lookup.contains(actor->getName());
+        }
+
+        if (should_clean(item_clean_whitelist, listed)) {
             actor->remove();
             ++total_clean_num;
         }
@@ -323,7 +423,7 @@ int ECleaner::clean_entity() const
     int total_clean_num = 0;
 
     for (const auto &actor : getServer().getLevel()->getActors()) {
-        if (actor->getType() == "minecraft:item") {
+        if (actor->asItem() != nullptr || actor->asPlayer() != nullptr) {
             continue;
         }
 
@@ -332,7 +432,9 @@ int ECleaner::clean_entity() const
             continue;
         }
 
-        if (should_clean(entity_clean_whitelist, entity_clean_lookup, actor->getType())) {
+        const std::string type = actor->getType();
+        const bool listed = entity_clean_lookup.contains(type);
+        if (should_clean(entity_clean_whitelist, listed)) {
             actor->remove();
             ++total_clean_num;
         }
@@ -350,7 +452,8 @@ void ECleaner::run_scheduled_item_clean() const
     const int cleaned = clean_item();
     if (broadcast_cleanup_results && cleaned > 0) {
         getServer().broadcastMessage(
-            "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of dropped items cleaned up: ") + std::to_string(cleaned)
+            "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of dropped items cleaned up: ")
+            + std::to_string(cleaned)
         );
     }
 }
@@ -364,7 +467,8 @@ void ECleaner::run_scheduled_entity_clean() const
     const int cleaned = clean_entity();
     if (broadcast_cleanup_results && cleaned > 0) {
         getServer().broadcastMessage(
-            "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of entities cleaned up: ") + std::to_string(cleaned)
+            "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of entities cleaned up: ")
+            + std::to_string(cleaned)
         );
     }
 }
@@ -410,7 +514,8 @@ void ECleaner::onEnable()
 {
     if (!load_config()) {
         getLogger().warning("ECleaner config could not be loaded; using in-memory defaults.");
-        item_clean_list = kDefaultItemCleanList;
+        item_clean_ids = kDefaultItemCleanIds;
+        item_clean_legacy_names.clear();
         entity_clean_list = kDefaultEntityCleanList;
         rebuild_lookup_sets();
     }
@@ -485,20 +590,25 @@ bool ECleaner::onCommand(
 
         sender.sendMessage(
             Tran.getLocal("Number of dropped items cleaned up: ") + std::to_string(item_count)
-            + " | " + Tran.getLocal("Number of entities cleaned up: ") + std::to_string(entity_count)
+            + " | " + Tran.getLocal("Number of entities cleaned up: ")
+            + std::to_string(entity_count)
         );
         return true;
     }
 
     if (args[1] == "item") {
         const int cleaned = clean_item();
-        sender.sendMessage(Tran.getLocal("Number of dropped items cleaned up: ") + std::to_string(cleaned));
+        sender.sendMessage(
+            Tran.getLocal("Number of dropped items cleaned up: ") + std::to_string(cleaned)
+        );
         return true;
     }
 
     if (args[1] == "entity") {
         const int cleaned = clean_entity();
-        sender.sendMessage(Tran.getLocal("Number of entities cleaned up: ") + std::to_string(cleaned));
+        sender.sendMessage(
+            Tran.getLocal("Number of entities cleaned up: ") + std::to_string(cleaned)
+        );
         return true;
     }
 
@@ -581,6 +691,7 @@ void ECleaner::ecl_main_menu(endstone::Player &player)
             config["broadcast_cleanup_results"] = broadcast_cleanup_results;
             config.erase("clean_time");
             config.erase("clean_tps");
+            config.erase("item_clean_list");
 
             write_json_file(config_path, config);
             schedule_cleanup_tasks();
