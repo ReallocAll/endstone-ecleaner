@@ -5,6 +5,10 @@ name: Build Endstone Ecleaner
 permissions:
   contents: write
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
   workflow_dispatch:
