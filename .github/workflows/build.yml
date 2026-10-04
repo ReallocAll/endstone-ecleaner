@@ -91,15 +91,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          clang-cl --version
           if ("${{ github.event.inputs.release_type }}" -eq "release") {
             cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DRELEASE_VERSION=1 `
-              -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
               -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
               -DVCPKG_TARGET_TRIPLET=x64-windows-static
           } else {
             cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release `
-              -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
               -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
               -DVCPKG_TARGET_TRIPLET=x64-windows-static
           }
