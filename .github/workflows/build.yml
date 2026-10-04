@@ -1,5 +1,7 @@
 name: Build Endstone Ecleaner
 
+# CI validates both supported platforms.
+
 permissions:
   contents: write
 

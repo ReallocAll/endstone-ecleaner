@@ -1,117 +1,149 @@
 ![header](https://capsule-render.vercel.app/api?type=waving&height=300&color=gradient&text=ECleaner)
 
- [English](README.md)
+[English](README.md)
 
 ## 介绍
 
-ECleaner为一款使用C++编写的实体清理插件，轻量便捷。
+ECleaner 是一个面向 Endstone 的轻量实体清理插件。本分支从 0.2.0 起改为以服务器性能为优先的高频清理策略：
 
-## 如何使用
+- 掉落物与实体使用独立定时器。
+- 清理间隔使用“秒”，默认掉落物 10 秒、实体 60 秒。
+- 默认静默清理，不再每轮播放声音或提前 30 秒广播。
+- 默认只清理明确配置在黑名单中的低价值掉落物和常见敌对生物。
+- 有自定义名称的实体不会被自动清理。
+- 服务器无人在线时跳过自动清理。
+- 不再使用 TPS 阈值触发清理，避免启动期/采样期 TPS 不稳定造成误触发。
 
-> 安装&配置
+## 安装
 
-* 安装Endstone
+将对应平台的插件文件放入 Endstone 服务端的 `plugins` 目录。首次启动后会生成：
 
-此步请查看endstone文档
+```text
+plugins/ecleaner/config.json
+```
 
-* 下载&安装ECleaner插件
+语言文件位于：
 
-> Windows平台
+```text
+plugins/ecleaner/language/
+```
 
-前往Releases处下载最新的Windows版本的压缩包,然后解压其中的文件到服务端的plugins目录
+## 默认配置
 
-> Linux平台
-
-前往Releases处下载最新的Linux版本的压缩包,然后解压其中的文件到服务端的plugins目录
-
-* 配置
-
-首次运行插件后将自动在plugins目录创建ecleaner文件夹,里面会生成配置文件config.json
-配置文件的默认配置如下:
-
-```bash
+```json
 {
-    "auto_entity_clean": true,
+    "language": "zh_CN",
     "auto_item_clean": true,
-    "clean_time": 15,
-    "clean_tps": 16,
+    "auto_entity_clean": true,
+    "item_clean_interval_seconds": 10,
+    "entity_clean_interval_seconds": 60,
+    "broadcast_cleanup_results": false,
+    "item_clean_whitelist": false,
+    "item_clean_ids": [
+        "minecraft:netherrack",
+        "minecraft:cobblestone",
+        "minecraft:cobbled_deepslate",
+        "minecraft:stone",
+        "minecraft:deepslate",
+        "minecraft:dirt",
+        "minecraft:grass_block",
+        "minecraft:gravel",
+        "minecraft:tuff",
+        "minecraft:granite",
+        "minecraft:diorite",
+        "minecraft:andesite",
+        "minecraft:calcite",
+        "minecraft:basalt",
+        "minecraft:blackstone",
+        "minecraft:end_stone",
+        "minecraft:sandstone",
+        "minecraft:red_sandstone"
+    ],
+    "item_clean_legacy_names": [],
+    "entity_clean_whitelist": false,
     "entity_clean_list": [
-        "minecraft:zombie_pigman",
         "minecraft:zombie",
         "minecraft:skeleton",
+        "minecraft:creeper",
+        "minecraft:spider",
+        "minecraft:cave_spider",
+        "minecraft:husk",
+        "minecraft:drowned",
+        "minecraft:stray",
         "minecraft:bogged",
-        "minecraft:slime"
-    ],
-    "entity_clean_whitelist": false,
-    "item_clean_list": [
-        "Shulker Box",
-        "White Shulker Box",
-        "Light Gray Shulker Box",
-        "Gray Shulker Box",
-        "Black Shulker Box",
-        "Brown Shulker Box",
-        "Red Shulker Box",
-        "Orange Shulker Box",
-        "Yellow Shulker Box",
-        "Lime Shulker Box",
-        "Green Shulker Box",
-        "Cyan Shulker Box",
-        "Light Blue Shulker Box",
-        "Blue Shulker Box",
-        "Purple Shulker Box",
-        "Magenta Shulker Box",
-        "Pink Shulker Box"
-    ],
-    "item_clean_whitelist": true
+        "minecraft:witch",
+        "minecraft:slime",
+        "minecraft:magma_cube",
+        "minecraft:zombie_pigman",
+        "minecraft:phantom"
+    ]
 }
 ```
 
-`auto_entity_clean` 为自动实体清理项，此项为true时为开启，为false时为关闭。开启时，定时清理和TPS过低触发清理以及执行命令/ecl clean时将会清理实体，关闭时则不清理。
+### 配置说明
 
-`auto_item_clean` 为自动掉落物清理项，此项为true时为开启，为false时为关闭。开启时，定时清理和TPS过低触发清理以及执行命令/ecl clean时将会清理掉落物，关闭时则不清理。
+`auto_item_clean`：是否启用定时掉落物清理。
 
-`clean_time` 为定时清理实体的时间间隔，单位为分钟，设置为0时为关闭定时清理。
+`auto_entity_clean`：是否启用定时实体清理。
 
-`clean_tps` 为触发自动清理的服务器最低平均TPS值，当服务器平均TPS值低于此值时，触发一次自动清理。
+`item_clean_interval_seconds`：掉落物清理间隔，单位秒。设为 `0` 时关闭掉落物定时清理。
 
-`entity_clean_list` 为实体清理名单，其为白名单或黑名单取决于实体清理名单模式，名单内的内容为实体的ID。
+`entity_clean_interval_seconds`：实体清理间隔，单位秒。设为 `0` 时关闭实体定时清理。
 
-`entity_clean_whitelist` 为实体清理模式，其值为true时为实体清理白名单模式，其值为false时为实体清理黑名单模式。当实体清理名单模式为白名单时，实体清理名单以外的实体将会被自动清理；为黑名单时，只有实体清理名单内的实体会被清理。默认配置为黑名单。
+`broadcast_cleanup_results`：是否把每轮自动清理结果广播给全服。默认 `false`，即静默清理。
 
-`item_clean_list` 为掉落物清理名单，其为白名单或黑名单取决于掉落物清理名单模式，名单内的内容为掉落物的英文名，而非ID。
+`item_clean_whitelist`：掉落物名单模式。为 `false` 时只有名单内物品会被删除；为 `true` 时名单内物品被保留、其他掉落物会被删除。
 
-`item_clean_whitelist` 为掉落物清理模式，其值为true时为掉落物清理白名单模式，其值为false时为掉落物清理黑名单模式。当掉落物清理名单模式为白名单时，掉落物清理名单以外的掉落物将会被自动清理；为黑名单时，只有掉落物清理名单内的实体会被清理。默认配置为白名单。
+`item_clean_ids`：掉落物名单，使用稳定的 ItemType ID，例如 `minecraft:netherrack`。不再依赖客户端语言或英文显示名。
 
-> 命令用法
+`item_clean_legacy_names`：仅用于兼容旧版无法映射的英文显示名。新配置通常保持为空。
 
-**命令列表(命令均为仅管理员可用)**
+`entity_clean_whitelist`：实体名单模式。为 `false` 时只有名单内实体会被删除；为 `true` 时名单内实体被保留、其他实体会被删除。
 
-```shell
+`entity_clean_list`：实体名单，使用实体 ID，例如 `minecraft:zombie`。
+
+自动实体清理会跳过带有自定义 NameTag 的实体。
+
+## 命令
+
+所有命令默认仅管理员可用。
+
+```text
 /ecl
 ```
 
-打开插件配置管理菜单，可以在此管理插件除实体与掉落物名单外的配置。
+打开配置菜单。可以调整自动清理开关、名单模式、掉落物/实体清理秒数以及是否广播自动清理结果。
 
-```shell
+```text
 /ecl clean
 ```
 
-手动执行一次清理，清理配置与自动清理配置相同。
+立即按当前自动清理开关执行一次掉落物和实体清理。
 
-```shell
+```text
 /ecl clean item
 ```
 
-手动执行掉落物清理
+立即执行一次掉落物清理。
 
-```shell
+```text
 /ecl clean entity
 ```
 
-手动执行实体清理
+立即执行一次实体清理。
 
-```shell
+```text
 /ecl reload
 ```
 
-重载插件配置
+重新读取配置，并安全地取消、重建两个定时任务。
+
+## 从 0.1.x 升级
+
+0.2.0 会移除旧的 `clean_time` 与 `clean_tps` 配置项，并补充新的秒级独立清理间隔。
+
+- 如果检测到**完全未修改的 0.1.x 默认配置**，会自动迁移到新的性能优先默认值：掉落物 10 秒、实体 60 秒，并把旧的“潜影盒白名单”改为低价值掉落物黑名单，避免 10 秒一次误删几乎所有掉落物。
+- 如果旧的 `clean_time` 被手动修改过，则会按原分钟数换算成秒并同时用于两个新定时器；`clean_time = 0` 会继续保持关闭。
+- 自定义过的黑/白名单与名单内容会尽量保留。旧 `item_clean_list` 会自动转换为稳定 ItemType ID；无法识别的自定义英文名会保存在 `item_clean_legacy_names` 中继续兼容。
+
+如果配置已经比较混乱，删除旧的 `plugins/ecleaner/config.json` 后重启即可重新生成 0.2.0 默认配置。

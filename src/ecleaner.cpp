@@ -1,550 +1,748 @@
 //
 // Created by yuhang on 2025/4/27.
+// Refactored for high-frequency cleanup by ReallocAll.
 //
 
 #include "ecleaner.h"
 #include "version.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
 translate Tran;
-const string data_path = "plugins/ecleaner";
+
+const std::string data_path = "plugins/ecleaner";
 const std::string config_path = "plugins/ecleaner/config.json";
-bool next_clean = false;
-shared_ptr<endstone::Task> auto_clean_task;
 
-//config
-bool auto_item_clean;
-bool auto_entity_clean;
-bool item_clean_whitelist;
-vector<string> item_clean_list;
-bool entity_clean_whitelist;
-vector<string> entity_clean_list;
-int clean_tps;
-int clean_time;
-int last_entity;
+std::shared_ptr<endstone::Task> item_clean_task;
+std::shared_ptr<endstone::Task> entity_clean_task;
 
-//默认config
-vector<string> item_clean_list_default = {"Shulker Box", "White Shulker Box", "Light Gray Shulker Box", "Gray Shulker Box",
-                   "Black Shulker Box", "Brown Shulker Box", "Red Shulker Box", "Orange Shulker Box",
-                   "Yellow Shulker Box", "Lime Shulker Box", "Green Shulker Box", "Cyan Shulker Box",
-                   "Light Blue Shulker Box", "Blue Shulker Box", "Purple Shulker Box",
-                   "Magenta Shulker Box", "Pink Shulker Box"};
+bool auto_item_clean = true;
+bool auto_entity_clean = true;
+bool item_clean_whitelist = false;
+std::vector<std::string> item_clean_ids;
+std::vector<std::string> item_clean_legacy_names;
+bool entity_clean_whitelist = false;
+std::vector<std::string> entity_clean_list;
+int item_clean_interval_seconds = 10;
+int entity_clean_interval_seconds = 60;
+bool broadcast_cleanup_results = false;
 
-vector<string> entity_clean_list_default = {"minecraft:zombie_pigman","minecraft:zombie","minecraft:skeleton","minecraft:bogged","minecraft:slime"};
+namespace {
 
+const std::vector<std::string> kDefaultItemCleanIds = {
+    "minecraft:netherrack",
+    "minecraft:cobblestone",
+    "minecraft:cobbled_deepslate",
+    "minecraft:stone",
+    "minecraft:deepslate",
+    "minecraft:dirt",
+    "minecraft:grass_block",
+    "minecraft:gravel",
+    "minecraft:tuff",
+    "minecraft:granite",
+    "minecraft:diorite",
+    "minecraft:andesite",
+    "minecraft:calcite",
+    "minecraft:basalt",
+    "minecraft:blackstone",
+    "minecraft:end_stone",
+    "minecraft:sandstone",
+    "minecraft:red_sandstone",
+};
 
+const std::vector<std::string> kDefaultEntityCleanList = {
+    "minecraft:zombie",
+    "minecraft:skeleton",
+    "minecraft:creeper",
+    "minecraft:spider",
+    "minecraft:cave_spider",
+    "minecraft:husk",
+    "minecraft:drowned",
+    "minecraft:stray",
+    "minecraft:bogged",
+    "minecraft:witch",
+    "minecraft:slime",
+    "minecraft:magma_cube",
+    "minecraft:zombie_pigman",
+    "minecraft:zombified_piglin",
+    "minecraft:phantom",
+};
 
-//数据目录和配置文件检查
-void ECleaner::datafile_check() const {
-    json df_config = {
-            {"language","zh_CN"},
-            {"auto_item_clean", true},
-            {"auto_entity_clean", true},
-            {"item_clean_whitelist", true},
-            {"item_clean_list", {"Shulker Box", "White Shulker Box", "Light Gray Shulker Box", "Gray Shulker Box",
-                                 "Black Shulker Box", "Brown Shulker Box", "Red Shulker Box", "Orange Shulker Box",
-                                 "Yellow Shulker Box", "Lime Shulker Box", "Green Shulker Box", "Cyan Shulker Box",
-                                 "Light Blue Shulker Box", "Blue Shulker Box", "Purple Shulker Box", "Magenta Shulker Box",
-                                 "Pink Shulker Box"}},
-            {"entity_clean_whitelist", false},
-            {"entity_clean_list", {"minecraft:zombie_pigman","minecraft:zombie","minecraft:skeleton","minecraft:bogged","minecraft:slime"}},
-            {"clean_tps", 16},
-            {"clean_time", 15}
+const std::vector<std::string> kLegacyDefaultItemCleanList = {
+    "Shulker Box",
+    "White Shulker Box",
+    "Light Gray Shulker Box",
+    "Gray Shulker Box",
+    "Black Shulker Box",
+    "Brown Shulker Box",
+    "Red Shulker Box",
+    "Orange Shulker Box",
+    "Yellow Shulker Box",
+    "Lime Shulker Box",
+    "Green Shulker Box",
+    "Cyan Shulker Box",
+    "Light Blue Shulker Box",
+    "Blue Shulker Box",
+    "Purple Shulker Box",
+    "Magenta Shulker Box",
+    "Pink Shulker Box",
+};
+
+const std::vector<std::string> kLegacyDefaultEntityCleanList = {
+    "minecraft:zombie_pigman",
+    "minecraft:zombie",
+    "minecraft:skeleton",
+    "minecraft:bogged",
+    "minecraft:slime",
+};
+
+const std::unordered_map<std::string, std::string> kLegacyItemNameToId = {
+    {"Netherrack", "minecraft:netherrack"},
+    {"Cobblestone", "minecraft:cobblestone"},
+    {"Cobbled Deepslate", "minecraft:cobbled_deepslate"},
+    {"Stone", "minecraft:stone"},
+    {"Deepslate", "minecraft:deepslate"},
+    {"Dirt", "minecraft:dirt"},
+    {"Grass Block", "minecraft:grass_block"},
+    {"Gravel", "minecraft:gravel"},
+    {"Tuff", "minecraft:tuff"},
+    {"Granite", "minecraft:granite"},
+    {"Diorite", "minecraft:diorite"},
+    {"Andesite", "minecraft:andesite"},
+    {"Calcite", "minecraft:calcite"},
+    {"Basalt", "minecraft:basalt"},
+    {"Blackstone", "minecraft:blackstone"},
+    {"End Stone", "minecraft:end_stone"},
+    {"Sandstone", "minecraft:sandstone"},
+    {"Red Sandstone", "minecraft:red_sandstone"},
+    {"Shulker Box", "minecraft:shulker_box"},
+    {"White Shulker Box", "minecraft:white_shulker_box"},
+    {"Light Gray Shulker Box", "minecraft:light_gray_shulker_box"},
+    {"Gray Shulker Box", "minecraft:gray_shulker_box"},
+    {"Black Shulker Box", "minecraft:black_shulker_box"},
+    {"Brown Shulker Box", "minecraft:brown_shulker_box"},
+    {"Red Shulker Box", "minecraft:red_shulker_box"},
+    {"Orange Shulker Box", "minecraft:orange_shulker_box"},
+    {"Yellow Shulker Box", "minecraft:yellow_shulker_box"},
+    {"Lime Shulker Box", "minecraft:lime_shulker_box"},
+    {"Green Shulker Box", "minecraft:green_shulker_box"},
+    {"Cyan Shulker Box", "minecraft:cyan_shulker_box"},
+    {"Light Blue Shulker Box", "minecraft:light_blue_shulker_box"},
+    {"Blue Shulker Box", "minecraft:blue_shulker_box"},
+    {"Purple Shulker Box", "minecraft:purple_shulker_box"},
+    {"Magenta Shulker Box", "minecraft:magenta_shulker_box"},
+    {"Pink Shulker Box", "minecraft:pink_shulker_box"},
+};
+
+std::unordered_set<std::string> item_clean_id_lookup;
+std::unordered_set<std::string> item_clean_legacy_name_lookup;
+std::unordered_set<std::string> entity_clean_lookup;
+
+json make_default_config()
+{
+    return {
+        {"language", "zh_CN"},
+        {"auto_item_clean", true},
+        {"auto_entity_clean", true},
+        {"item_clean_interval_seconds", 10},
+        {"entity_clean_interval_seconds", 60},
+        {"broadcast_cleanup_results", false},
+        {"item_clean_whitelist", false},
+        {"item_clean_ids", kDefaultItemCleanIds},
+        {"item_clean_legacy_names", json::array()},
+        {"entity_clean_whitelist", false},
+        {"entity_clean_list", kDefaultEntityCleanList},
     };
-
-    if (!(std::filesystem::exists(data_path))) {
-        getLogger().info(Tran.getLocal("No data path,auto create"));
-        std::filesystem::create_directory(data_path);
-        if (!(std::filesystem::exists(config_path))) {
-            if (std::ofstream file(config_path); file.is_open()) {
-                file << df_config.dump(4);
-                file.close();
-                getLogger().info(Tran.getLocal("Config file created"));
-            }
-        }
-    } else if (std::filesystem::exists(data_path)) {
-        if (!(std::filesystem::exists(config_path))) {
-            if (std::ofstream file(config_path); file.is_open()) {
-                file << df_config.dump(4);
-                file.close();
-                getLogger().info(Tran.getLocal("Config file created"));
-            }
-        } else {
-            bool need_update = false;
-            json loaded_config;
-
-            // 加载现有配置文件
-            std::ifstream file(config_path);
-            file >> loaded_config;
-
-            // 检查配置完整性并更新
-            for (auto& [key, value] : df_config.items()) {
-                if (!loaded_config.contains(key)) {
-                    loaded_config[key] = value;
-                    getLogger().info(Tran.tr("Config '{}' has update with default config",key));
-                    need_update = true;
-                }
-            }
-
-            // 如果需要更新配置文件，则进行写入
-            if (need_update) {
-                if (std::ofstream outfile(config_path); outfile.is_open()) {
-                    outfile << loaded_config.dump(4);
-                    outfile.close();
-                    getLogger().info(Tran.getLocal("Config file update over"));
-                }
-            }
-        }
-    }
-    if (!(std::filesystem::exists(language_path))) {
-        std::filesystem::create_directory(language_path);
-    }
 }
 
-// 读取配置文件
-[[nodiscard]] json ECleaner::read_config() const {
-    std::ifstream i(config_path);
+std::optional<std::string> legacy_item_name_to_id(const std::string &value)
+{
+    if (value.rfind("minecraft:", 0) == 0) {
+        return value;
+    }
+
+    const auto it = kLegacyItemNameToId.find(value);
+    if (it == kLegacyItemNameToId.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+void migrate_legacy_item_list(json &config, bool &changed)
+{
+    if (!config.contains("item_clean_list")) {
+        return;
+    }
+
+    const auto legacy_names = config.value("item_clean_list", std::vector<std::string>{});
+    const bool legacy_default_mode = config.value("item_clean_whitelist", true);
+
+    if (!config.contains("item_clean_ids")) {
+        if (legacy_default_mode && legacy_names == kLegacyDefaultItemCleanList) {
+            // Upstream 0.1.x default: preserve shulker boxes and delete everything else.
+            // That policy is unsafe at a 10-second interval, so move untouched defaults
+            // to the new performance-first terrain-waste blacklist.
+            config["item_clean_whitelist"] = false;
+            config["item_clean_ids"] = kDefaultItemCleanIds;
+            config["item_clean_legacy_names"] = json::array();
+        }
+        else {
+            std::vector<std::string> migrated_ids;
+            std::vector<std::string> unknown_names;
+
+            migrated_ids.reserve(legacy_names.size());
+            unknown_names.reserve(legacy_names.size());
+
+            for (const auto &name : legacy_names) {
+                if (const auto id = legacy_item_name_to_id(name)) {
+                    migrated_ids.push_back(*id);
+                }
+                else {
+                    unknown_names.push_back(name);
+                }
+            }
+
+            config["item_clean_ids"] = migrated_ids;
+            config["item_clean_legacy_names"] = unknown_names;
+        }
+    }
+
+    config.erase("item_clean_list");
+    changed = true;
+}
+
+bool normalize_config(json &config)
+{
+    const json defaults = make_default_config();
+    bool changed = false;
+
+    const bool has_legacy_schedule =
+        config.contains("clean_time") || config.contains("clean_tps");
+
+    if (has_legacy_schedule) {
+        const int legacy_clean_time = std::clamp(config.value("clean_time", 15), 0, 60);
+
+        // A partially missing upstream 0.1.x item list must not inherit the new
+        // default IDs while retaining whitelist mode, which would invert the
+        // intended performance-first policy and delete almost everything else.
+        if (!config.contains("item_clean_list")
+            && !config.contains("item_clean_ids")
+            && config.value("item_clean_whitelist", true)) {
+            config["item_clean_whitelist"] = false;
+            config["item_clean_ids"] = kDefaultItemCleanIds;
+            config["item_clean_legacy_names"] = json::array();
+            changed = true;
+        }
+
+        // Preserve custom legacy schedules, but convert the untouched upstream
+        // 15-minute default into the new 10s/60s performance-first defaults.
+        if (!config.contains("item_clean_interval_seconds")) {
+            config["item_clean_interval_seconds"] =
+                legacy_clean_time == 15 ? 10 : legacy_clean_time * 60;
+            changed = true;
+        }
+        if (!config.contains("entity_clean_interval_seconds")) {
+            config["entity_clean_interval_seconds"] =
+                legacy_clean_time == 15 ? 60 : legacy_clean_time * 60;
+            changed = true;
+        }
+
+        const bool legacy_default_entity_mode =
+            !config.value("entity_clean_whitelist", false);
+        const bool legacy_entity_list_missing = !config.contains("entity_clean_list");
+        const auto legacy_entity_list =
+            config.value("entity_clean_list", std::vector<std::string>{});
+        if (legacy_default_entity_mode
+            && (legacy_entity_list_missing || legacy_entity_list == kLegacyDefaultEntityCleanList)) {
+            config["entity_clean_whitelist"] = false;
+            config["entity_clean_list"] = kDefaultEntityCleanList;
+            changed = true;
+        }
+
+        if (config.erase("clean_time") > 0) {
+            changed = true;
+        }
+        if (config.erase("clean_tps") > 0) {
+            changed = true;
+        }
+    }
+
+    migrate_legacy_item_list(config, changed);
+
+    for (const auto &[key, value] : defaults.items()) {
+        if (!config.contains(key)) {
+            config[key] = value;
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+void rebuild_lookup_sets()
+{
+    item_clean_id_lookup.clear();
+    item_clean_id_lookup.reserve(item_clean_ids.size());
+    item_clean_id_lookup.insert(item_clean_ids.begin(), item_clean_ids.end());
+
+    item_clean_legacy_name_lookup.clear();
+    item_clean_legacy_name_lookup.reserve(item_clean_legacy_names.size());
+    item_clean_legacy_name_lookup.insert(item_clean_legacy_names.begin(), item_clean_legacy_names.end());
+
+    entity_clean_lookup.clear();
+    entity_clean_lookup.reserve(entity_clean_list.size());
+    entity_clean_lookup.insert(entity_clean_list.begin(), entity_clean_list.end());
+}
+
+bool should_clean(bool whitelist_mode, bool listed)
+{
+    return whitelist_mode ? !listed : listed;
+}
+
+void write_json_file(const std::string &path, const json &value)
+{
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        throw std::runtime_error("failed to open config file for writing");
+    }
+    out << value.dump(4);
+}
+
+}  // namespace
+
+void ECleaner::datafile_check() const
+{
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(language_path);
+
+    const json defaults = make_default_config();
+
+    if (!std::filesystem::exists(config_path)) {
+        try {
+            write_json_file(config_path, defaults);
+            getLogger().info("Created default ECleaner config.");
+        }
+        catch (const std::exception &e) {
+            getLogger().error(std::string("Failed to create ECleaner config: ") + e.what());
+        }
+        return;
+    }
+
     try {
-        json j;
-        i >> j;
-        return j;
-    } catch (json::parse_error& ex) { // 捕获解析错误
-        getLogger().error( ex.what());
-        json error_value = {
-                {"error","error"}
-        };
-        return error_value;
+        std::ifstream file(config_path);
+        json loaded_config;
+        file >> loaded_config;
+
+        if (normalize_config(loaded_config)) {
+            write_json_file(config_path, loaded_config);
+            getLogger().info("Migrated ECleaner config to the high-frequency cleanup schema.");
+        }
+    }
+    catch (const std::exception &e) {
+        getLogger().error(std::string("Failed to validate ECleaner config: ") + e.what());
     }
 }
 
-//清理掉落物
-[[nodiscard]] int ECleaner::clean_item() const {
+json ECleaner::read_config() const
+{
+    try {
+        std::ifstream file(config_path);
+        if (!file.is_open()) {
+            throw std::runtime_error("config file could not be opened");
+        }
+
+        json value;
+        file >> value;
+        return value;
+    }
+    catch (const std::exception &e) {
+        getLogger().error(std::string("Failed to read ECleaner config: ") + e.what());
+        return {{"error", e.what()}};
+    }
+}
+
+bool ECleaner::load_config()
+{
+    json config = read_config();
+    if (config.contains("error")) {
+        return false;
+    }
+
+    try {
+        if (normalize_config(config)) {
+            write_json_file(config_path, config);
+            getLogger().info("Migrated ECleaner config during reload.");
+        }
+        auto_item_clean = config.value("auto_item_clean", true);
+        auto_entity_clean = config.value("auto_entity_clean", true);
+
+        item_clean_whitelist = config.value("item_clean_whitelist", false);
+        entity_clean_whitelist = config.value("entity_clean_whitelist", false);
+
+        item_clean_ids = config.value("item_clean_ids", kDefaultItemCleanIds);
+        item_clean_legacy_names =
+            config.value("item_clean_legacy_names", std::vector<std::string>{});
+        entity_clean_list = config.value("entity_clean_list", kDefaultEntityCleanList);
+
+        item_clean_interval_seconds =
+            std::clamp(config.value("item_clean_interval_seconds", 10), 0, 3600);
+        entity_clean_interval_seconds =
+            std::clamp(config.value("entity_clean_interval_seconds", 60), 0, 3600);
+        broadcast_cleanup_results = config.value("broadcast_cleanup_results", false);
+
+        rebuild_lookup_sets();
+
+        const std::string language = config.value("language", std::string("zh_CN"));
+        language_file = language_path + language + ".json";
+        Tran = translate(language_file);
+        Tran.loadLanguage();
+
+        return true;
+    }
+    catch (const std::exception &e) {
+        getLogger().error(std::string("Invalid ECleaner config: ") + e.what());
+        return false;
+    }
+}
+
+int ECleaner::clean_item() const
+{
     int total_clean_num = 0;
-    for (const auto& one_actor:getServer().getLevel()->getActors()) {
-        if (one_actor->getType() == "minecraft:item") {
-            //白名单模式
-            if (item_clean_whitelist) {
-                //物品不在白名单里,杀
-                if (ranges::find(item_clean_list,one_actor->getName()) == item_clean_list.end()) {
-                    one_actor->remove();
-                    total_clean_num +=1;
-                }
-            }
-            //黑名单模式
-            else {
-                //物品在黑名单里,杀
-                if (ranges::find(item_clean_list,one_actor->getName()) != item_clean_list.end()) {
-                    one_actor->remove();
-                    total_clean_num +=1;
-                }
-            }
+
+    for (const auto &actor : getServer().getLevel()->getActors()) {
+        auto *item = actor->asItem();
+        if (item == nullptr) {
+            continue;
+        }
+
+        const auto stack = item->getItemStack();
+        const std::string item_id = static_cast<std::string>(stack.getType().getId());
+
+        bool listed = item_clean_id_lookup.contains(item_id);
+        if (!listed && !item_clean_legacy_name_lookup.empty()) {
+            listed = item_clean_legacy_name_lookup.contains(actor->getName());
+        }
+
+        if (should_clean(item_clean_whitelist, listed)) {
+            actor->remove();
+            ++total_clean_num;
         }
     }
+
     return total_clean_num;
 }
 
-//清理实体
-[[nodiscard]] int ECleaner::clean_entity() const {
+int ECleaner::clean_entity() const
+{
     int total_clean_num = 0;
-    for (const auto& one_actor:getServer().getLevel()->getActors()) {
-        if (one_actor->getType() != "minecraft:item") {
-            //检查有没有名字
-            if (!one_actor->getNameTag().empty()) {
-                continue;
-            }
-            //白名单模式
-            if (entity_clean_whitelist) {
-                //实体不在白名单里,杀
-                if (ranges::find(entity_clean_list,one_actor->getType()) == entity_clean_list.end()) {
-                    one_actor->remove();
-                    total_clean_num +=1;
-                }
-            }
-            //黑名单模式
-            else {
-                //实体在黑名单里,杀
-                if (ranges::find(entity_clean_list,one_actor->getType()) != entity_clean_list.end()) {
-                    one_actor->remove();
-                    total_clean_num +=1;
-                }
-            }
+
+    for (const auto &actor : getServer().getLevel()->getActors()) {
+        if (actor->asItem() != nullptr || actor->asPlayer() != nullptr) {
+            continue;
+        }
+
+        // Named entities are assumed to be intentionally kept by players.
+        if (!actor->getNameTag().empty()) {
+            continue;
+        }
+
+        const std::string type = actor->getType();
+        const bool listed = entity_clean_lookup.contains(type);
+        if (should_clean(entity_clean_whitelist, listed)) {
+            actor->remove();
+            ++total_clean_num;
         }
     }
+
     return total_clean_num;
 }
 
-//自动检查当前服务器状态是否可执行清理
-void ECleaner::check_server_run_clean() const {
+void ECleaner::run_scheduled_item_clean() const
+{
     if (getServer().getOnlinePlayers().empty()) {
         return;
     }
-    //tps比清理触发tps高,不清理
-    if (static_cast<int>(getServer().getAverageTicksPerSecond()) >= clean_tps) {
-        //清理状态为false
-        if (!next_clean) {
-            return;
-        }
-    }
-    //排除是否为实体造成的性能问题
-     if (abs(static_cast<int>(getServer().getLevel()->getActors().size()) - last_entity) < 20) {
-         //清理状态为false
-         if (!next_clean) {
-             return;
-         }
-     }
-    //达到触发清理tps,设置下次清理状态
-    if (!next_clean) {
-        next_clean = true;
-        if (endstone::CommandSenderWrapper commandSenderWrapper(getServer().getCommandSender()); getServer().dispatchCommand(commandSenderWrapper,"playsound note.banjo @a")) {
-        }
-        getServer().broadcastMessage("§l§2 [ECleaner] §r"+endstone::ColorFormat::Yellow+Tran.getLocal("The server's current average TPS has fallen below the set value, and entity cleanup will begin soon."));
-        return;
-    }
 
-    run_clean();
-
-    //清理完毕
-    next_clean = false;
+    const int cleaned = clean_item();
+    if (broadcast_cleanup_results && cleaned > 0) {
+        getServer().broadcastMessage(
+            "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of dropped items cleaned up: ")
+            + std::to_string(cleaned)
+        );
+    }
 }
 
-//执行清理
-void ECleaner::run_clean() const {
-    int clean_item_num = 0;
-    int clean_entity_num = 0;
-    //清理掉落物
-    if (auto_item_clean) {
-        clean_item_num = clean_item();
-        getServer().broadcastMessage("§l§2 [ECleaner] §r"+endstone::ColorFormat::Yellow+Tran.getLocal("Number of dropped items cleaned up: ") + to_string(clean_item_num));
-    }
-    //清理实体
-    if (auto_entity_clean) {
-        clean_entity_num = clean_entity();
-        getServer().broadcastMessage("§l§2 [ECleaner] §r"+endstone::ColorFormat::Yellow+Tran.getLocal("Number of entities cleaned up: ") + to_string(clean_entity_num));
-    }
-    if (clean_entity_num == 0 && clean_item_num == 0) {
-        getServer().broadcastMessage("§l§2 [ECleaner] §r"+endstone::ColorFormat::Yellow+Tran.getLocal("No entities were cleaned up."));
-    }
-    last_entity = static_cast<int>(getServer().getLevel()->getActors().size());
-}
-
-//手动执行掉落物清理
-void ECleaner::run_clean_item() const {
-    //清理掉落物
-    const int clean_item_num = clean_item();
-    getServer().broadcastMessage("§l§2 [ECleaner] §r"+endstone::ColorFormat::Yellow+Tran.getLocal("Number of dropped items cleaned up: ") + to_string(clean_item_num));
-}
-
-//手动执行实体清理
-void ECleaner::run_clean_entity() const {
-    //清理实体
-    const int clean_entity_num = clean_entity();
-    getServer().broadcastMessage("§l§2 [ECleaner] §r"+endstone::ColorFormat::Yellow+Tran.getLocal("Number of entities cleaned up: ") + to_string(clean_entity_num));
-}
-
-//定期清理
-void ECleaner::auto_clean() {
+void ECleaner::run_scheduled_entity_clean() const
+{
     if (getServer().getOnlinePlayers().empty()) {
         return;
     }
-    if (endstone::CommandSenderWrapper commandSenderWrapper(getServer().getCommandSender()); getServer().dispatchCommand(commandSenderWrapper,"playsound note.banjo @a")) {
+
+    const int cleaned = clean_entity();
+    if (broadcast_cleanup_results && cleaned > 0) {
+        getServer().broadcastMessage(
+            "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of entities cleaned up: ")
+            + std::to_string(cleaned)
+        );
     }
-    getServer().broadcastMessage("§l§2 [ECleaner] §r"+endstone::ColorFormat::Yellow+Tran.getLocal("There are 30 seconds remaining until the server entity cleanup begins."));
-    getServer().getScheduler().runTaskTimer(*this,[&]() { run_clean(); }, 600, 0);
 }
 
-void ECleaner::onLoad() {
-    getLogger().info("onLoad is called");
+void ECleaner::schedule_cleanup_tasks()
+{
+    if (item_clean_task) {
+        item_clean_task->cancel();
+        item_clean_task.reset();
+    }
+    if (entity_clean_task) {
+        entity_clean_task->cancel();
+        entity_clean_task.reset();
+    }
+
+    if (auto_item_clean && item_clean_interval_seconds > 0) {
+        const auto interval_ticks = static_cast<std::uint64_t>(item_clean_interval_seconds) * 20;
+        item_clean_task = getServer().getScheduler().runTaskTimer(
+            *this,
+            [this]() { run_scheduled_item_clean(); },
+            interval_ticks,
+            interval_ticks
+        );
+    }
+
+    if (auto_entity_clean && entity_clean_interval_seconds > 0) {
+        const auto interval_ticks = static_cast<std::uint64_t>(entity_clean_interval_seconds) * 20;
+        entity_clean_task = getServer().getScheduler().runTaskTimer(
+            *this,
+            [this]() { run_scheduled_entity_clean(); },
+            interval_ticks,
+            interval_ticks
+        );
+    }
+}
+
+void ECleaner::onLoad()
+{
     datafile_check();
 }
 
-void ECleaner::onEnable() {
-    getLogger().info("onEnable is called");
-    language_file = language_path + getServer().getLanguage().getLocale() + ".json";
-    Tran = translate(language_file);
-    Tran.loadLanguage();
-    getLogger().info(endstone::ColorFormat::Yellow+Tran.getLocal("ECleaner has been enable,version: ")+getServer().getPluginManager().getPlugin("ecleaner")->getDescription().getVersion());
-
-    //进行一个配置文件的读取
-    json json_msg = read_config();
-    //设置默认
-    string language = "en_US";
-    auto_item_clean = true;
-    auto_entity_clean = true;
-    item_clean_whitelist = true;
-    entity_clean_whitelist = false;
-    item_clean_list = item_clean_list_default;
-    entity_clean_list = entity_clean_list_default;
-    clean_tps = 16;
-    clean_time = 15;
-    try {
-        if (!json_msg.contains("error")) {
-            auto_item_clean = json_msg["auto_item_clean"];
-            auto_entity_clean = json_msg["auto_entity_clean"];
-            item_clean_whitelist = json_msg["item_clean_whitelist"];
-            entity_clean_whitelist = json_msg["entity_clean_whitelist"];
-            item_clean_list = json_msg["item_clean_list"];
-            entity_clean_list = json_msg["entity_clean_list"];
-            clean_tps = json_msg["clean_tps"];
-            clean_time = json_msg["clean_time"];
-            language = json_msg["language"];
-        } else {
-            getLogger().error(Tran.getLocal("Config file error!Use default config"));
-        }
-    } catch (const std::exception& e) {
-        getLogger().error(Tran.getLocal("Config file error!Use default config")+","+e.what());
+void ECleaner::onEnable()
+{
+    if (!load_config()) {
+        getLogger().warning("ECleaner config could not be loaded; using in-memory defaults.");
+        item_clean_ids = kDefaultItemCleanIds;
+        item_clean_legacy_names.clear();
+        entity_clean_list = kDefaultEntityCleanList;
+        rebuild_lookup_sets();
     }
-    language_file = language_path+language+".json";
-    Tran = translate(language_file);
-    Tran.loadLanguage();
-    translate::checkLanguageCommon(language_path, language_file);
-    //5秒检查一次tps,延迟30秒
-    getServer().getScheduler().runTaskTimer(*this,[&]() { check_server_run_clean(); }, 0, 100);
-    //定时清理
-    if (clean_time >= 1) {
-        const std::uint64_t clean_pre_time = clean_time*60*20;
-        auto_clean_task = getServer().getScheduler().runTaskTimer(*this, [&]() { auto_clean(); }, 0, clean_pre_time);
+
+    schedule_cleanup_tasks();
+
+    getLogger().info(
+        "ECleaner " + getDescription().getVersion()
+        + " enabled: item interval=" + std::to_string(item_clean_interval_seconds)
+        + "s, entity interval=" + std::to_string(entity_clean_interval_seconds) + "s."
+    );
+}
+
+void ECleaner::onDisable()
+{
+    if (item_clean_task) {
+        item_clean_task->cancel();
+        item_clean_task.reset();
+    }
+    if (entity_clean_task) {
+        entity_clean_task->cancel();
+        entity_clean_task.reset();
     }
 }
 
-void ECleaner::onDisable() {
-    getLogger().info("onDisable is called");
-}
+bool ECleaner::onCommand(
+    endstone::CommandSender &sender,
+    const endstone::Command &command,
+    const std::vector<std::string> &args
+)
+{
+    if (command.getName() != "ecl") {
+        return false;
+    }
 
-bool ECleaner::onCommand(endstone::CommandSender &sender, const endstone::Command &command, const std::vector<std::string> &args) {
-    if (command.getName() == "ecl")
-    {
-        if (!sender.asPlayer()) {
-            if (!args.empty()) {
-                if (args[0] == "clean") {
-                    if (args[1] == "entity") {
-                        run_clean_entity();
-                    } else if (args[1] == "item") {
-                        run_clean_item();
-                    } else {
-                        run_clean();
-                    }
-                }
-                else if (args[0] == "reload") {
-                    //进行一个配置文件的读取
-                    json json_msg = read_config();
-                    //设置默认
-                    auto_item_clean = true;
-                    auto_entity_clean = true;
-                    item_clean_whitelist = true;
-                    entity_clean_whitelist = false;
-                    item_clean_list = item_clean_list_default;
-                    entity_clean_list = entity_clean_list_default;
-                    clean_tps = 16;
-                    clean_time = 15;
-                    try {
-                        if (!json_msg.contains("error")) {
-                            auto_item_clean = json_msg["auto_item_clean"];
-                            auto_entity_clean = json_msg["auto_entity_clean"];
-                            item_clean_whitelist = json_msg["item_clean_whitelist"];
-                            entity_clean_whitelist = json_msg["entity_clean_whitelist"];
-                            item_clean_list = json_msg["item_clean_list"];
-                            entity_clean_list = json_msg["entity_clean_list"];
-                            clean_tps = json_msg["clean_tps"];
-                            clean_time = json_msg["clean_time"];
-                        } else {
-                            getLogger().error(Tran.getLocal("Config file error!Use default config"));
-                        }
-                    } catch (const std::exception& e) {
-                        getLogger().error(Tran.getLocal("Config file error!Use default config")+","+e.what());
-                    }
-                    //定时清理
-                    if (clean_time >= 1) {
-                        auto_clean_task->cancel();
-                        const std::uint64_t clean_pre_time = clean_time*60*20;
-                        auto_clean_task = getServer().getScheduler().runTaskTimer(*this, [&]() { auto_clean(); }, 0, clean_pre_time);
-                    }
-                }
-            }
+    if (args.empty()) {
+        if (auto *player = sender.asPlayer()) {
+            ecl_main_menu(*player);
         }
         else {
-            const auto player = sender.asPlayer();
-            if (args.empty()) {
-                ecl_main_menu(*player);
-            }
-            else if (args[0] == "clean") {
-                if (args[1] == "entity") {
-                    run_clean_entity();
-                } else if (args[1] == "item") {
-                    run_clean_item();
-                } else {
-                    run_clean();
-                }
-            } else if (args[0] == "reload") {
-                //进行一个配置文件的读取
-                json json_msg = read_config();
-                try {
-                    if (!json_msg.contains("error")) {
-                        auto_item_clean = json_msg["auto_item_clean"];
-                        auto_entity_clean = json_msg["auto_entity_clean"];
-                        item_clean_whitelist = json_msg["item_clean_whitelist"];
-                        entity_clean_whitelist = json_msg["entity_clean_whitelist"];
-                        item_clean_list = json_msg["item_clean_list"];
-                        entity_clean_list = json_msg["entity_clean_list"];
-                        clean_tps = json_msg["clean_tps"];
-                        clean_time = json_msg["clean_time"];
-                        sender.sendMessage(Tran.getLocal("Reload completed."));
-                    } else {
-                        sender.sendErrorMessage(Tran.getLocal("Config file error!Use default config"));
-                        auto_item_clean = true;
-                        auto_entity_clean = true;
-                        item_clean_whitelist = true;
-                        entity_clean_whitelist = false;
-                        item_clean_list = {"Shulker Box", "White Shulker Box", "Light Gray Shulker Box", "Gray Shulker Box",
-                                           "Black Shulker Box", "Brown Shulker Box", "Red Shulker Box", "Orange Shulker Box",
-                                           "Yellow Shulker Box", "Lime Shulker Box", "Green Shulker Box", "Cyan Shulker Box",
-                                           "Light Blue Shulker Box", "Blue Shulker Box", "Purple Shulker Box",
-                                           "Magenta Shulker Box", "Pink Shulker Box"};
-                        entity_clean_list = {"minecraft:zombie_pigman","minecraft:zombie","minecraft:skeleton","minecraft:bogged","minecraft:slime"};
-                        clean_tps = 16;
-                        clean_time = 15;
-                    }
-                } catch (const std::exception& e) {
-                    auto_item_clean = true;
-                    auto_entity_clean = true;
-                    item_clean_whitelist = true;
-                    entity_clean_whitelist = false;
-                    item_clean_list = {"Shulker Box", "White Shulker Box", "Light Gray Shulker Box", "Gray Shulker Box",
-                                       "Black Shulker Box", "Brown Shulker Box", "Red Shulker Box", "Orange Shulker Box",
-                                       "Yellow Shulker Box", "Lime Shulker Box", "Green Shulker Box", "Cyan Shulker Box",
-                                       "Light Blue Shulker Box", "Blue Shulker Box", "Purple Shulker Box",
-                                       "Magenta Shulker Box", "Pink Shulker Box"};
-                    entity_clean_list = {"minecraft:zombie_pigman","minecraft:zombie","minecraft:skeleton","minecraft:bogged","minecraft:slime"};
-                    clean_tps = 16;
-                    clean_time = 15;
-                    sender.sendErrorMessage(Tran.getLocal("Config file error!Use default config")+","+e.what());
-                }
-                //定时清理
-                if (clean_time >= 1) {
-                    auto_clean_task->cancel();
-                    const std::uint64_t clean_pre_time = clean_time*60*20;
-                    auto_clean_task = getServer().getScheduler().runTaskTimer(*this, [&]() { auto_clean(); }, 0, clean_pre_time);
-                }
-            }
+            sender.sendMessage("Usage: /ecl clean [item|entity] | /ecl reload");
         }
+        return true;
     }
+
+    if (args[0] == "reload") {
+        if (!load_config()) {
+            sender.sendErrorMessage("ECleaner config reload failed.");
+            return true;
+        }
+
+        schedule_cleanup_tasks();
+        sender.sendMessage(Tran.getLocal("Reload completed."));
+        return true;
+    }
+
+    if (args[0] != "clean") {
+        sender.sendErrorMessage("Usage: /ecl clean [item|entity] | /ecl reload");
+        return true;
+    }
+
+    if (args.size() == 1) {
+        int item_count = 0;
+        int entity_count = 0;
+
+        if (auto_item_clean) {
+            item_count = clean_item();
+        }
+        if (auto_entity_clean) {
+            entity_count = clean_entity();
+        }
+
+        sender.sendMessage(
+            Tran.getLocal("Number of dropped items cleaned up: ") + std::to_string(item_count)
+            + " | " + Tran.getLocal("Number of entities cleaned up: ")
+            + std::to_string(entity_count)
+        );
+        return true;
+    }
+
+    if (args[1] == "item") {
+        const int cleaned = clean_item();
+        sender.sendMessage(
+            Tran.getLocal("Number of dropped items cleaned up: ") + std::to_string(cleaned)
+        );
+        return true;
+    }
+
+    if (args[1] == "entity") {
+        const int cleaned = clean_entity();
+        sender.sendMessage(
+            Tran.getLocal("Number of entities cleaned up: ") + std::to_string(cleaned)
+        );
+        return true;
+    }
+
+    sender.sendErrorMessage("Usage: /ecl clean [item|entity] | /ecl reload");
     return true;
 }
 
-//ecl菜单
-void ECleaner::ecl_main_menu(endstone::Player& player) {
+void ECleaner::ecl_main_menu(endstone::Player &player)
+{
     endstone::ModalForm menu;
     menu.setTitle(Tran.getLocal("ECL Config Menu"));
-    endstone::Toggle AutoEntityClean;
-    endstone::Toggle AutoItemClean;
-    endstone::Toggle EntityWhiteList;
-    endstone::Toggle ItemWhiteList;
-    endstone::Slider CleanTime;
-    endstone::Slider CleanTps;
 
-    AutoEntityClean.setLabel(Tran.getLocal("Auto clean entity"));
-    AutoEntityClean.setDefaultValue(auto_entity_clean);
+    endstone::Toggle auto_entity;
+    auto_entity.setLabel(Tran.getLocal("Auto clean entity"));
+    auto_entity.setDefaultValue(auto_entity_clean);
 
-    AutoItemClean.setLabel(Tran.getLocal("Auto clean item"));
-    AutoItemClean.setDefaultValue(auto_item_clean);
+    endstone::Toggle auto_item;
+    auto_item.setLabel(Tran.getLocal("Auto clean item"));
+    auto_item.setDefaultValue(auto_item_clean);
 
-    EntityWhiteList.setLabel(Tran.getLocal("Entity whitelist mode"));
-    EntityWhiteList.setDefaultValue(entity_clean_whitelist);
+    endstone::Toggle entity_whitelist;
+    entity_whitelist.setLabel(Tran.getLocal("Entity whitelist mode"));
+    entity_whitelist.setDefaultValue(entity_clean_whitelist);
 
-    ItemWhiteList.setLabel(Tran.getLocal("Item whitelist mode"));
-    ItemWhiteList.setDefaultValue(item_clean_whitelist);
+    endstone::Toggle item_whitelist;
+    item_whitelist.setLabel(Tran.getLocal("Item whitelist mode"));
+    item_whitelist.setDefaultValue(item_clean_whitelist);
 
-    CleanTime.setLabel(Tran.getLocal("Scheduled cleanup interval time(min)"));
-    CleanTime.setMin(0);
-    CleanTime.setMax(60);
-    CleanTime.setStep(1);
-    CleanTime.setDefaultValue(static_cast<float>(clean_time));
+    endstone::Slider item_interval;
+    item_interval.setLabel(Tran.getLocal("Item cleanup interval (seconds)"));
+    item_interval.setMin(0);
+    item_interval.setMax(300);
+    item_interval.setStep(5);
+    item_interval.setDefaultValue(static_cast<float>(item_clean_interval_seconds));
 
-    CleanTps.setLabel(Tran.getLocal("Minimum TPS to trigger automatic cleanup"));
-    CleanTps.setMin(1);
-    CleanTps.setMax(20);
-    CleanTps.setDefaultValue(static_cast<float>(clean_tps));
-    CleanTps.setStep(1);
+    endstone::Slider entity_interval;
+    entity_interval.setLabel(Tran.getLocal("Entity cleanup interval (seconds)"));
+    entity_interval.setMin(0);
+    entity_interval.setMax(600);
+    entity_interval.setStep(10);
+    entity_interval.setDefaultValue(static_cast<float>(entity_clean_interval_seconds));
 
-    menu.setControls({AutoEntityClean,AutoItemClean,EntityWhiteList,ItemWhiteList,CleanTime,CleanTps});
-    menu.setOnSubmit([this](endstone::Player* p, const string& response) {
-        json response_json = json::parse(response);
-        bool auto_entity_clean_new = response_json[0].get<bool>();
-        bool auto_item_clean_new = response_json[1].get<bool>();
-        bool entity_clean_whitelist_new = response_json[2].get<bool>();
-        bool item_clean_whitelist_new = response_json[3].get<bool>();
-        int clean_time_new = response_json[4].get<int>();
-        int clean_tps_new = response_json[5].get<int>();
+    endstone::Toggle broadcast_results;
+    broadcast_results.setLabel(Tran.getLocal("Broadcast scheduled cleanup results"));
+    broadcast_results.setDefaultValue(broadcast_cleanup_results);
 
-        bool need_update = false;
-        auto tasks = getServer().getScheduler().getPendingTasks();
-        json updated_config;
+    menu.setControls({
+        auto_entity,
+        auto_item,
+        entity_whitelist,
+        item_whitelist,
+        item_interval,
+        entity_interval,
+        broadcast_results,
+    });
 
-        // 加载现有配置文件
-        std::ifstream file(config_path);
-        file >> updated_config;
-
-        // 比较并更新全局变量和配置文件
-        if (auto_entity_clean != auto_entity_clean_new) {
-            auto_entity_clean = auto_entity_clean_new;
-            updated_config["auto_entity_clean"] = auto_entity_clean;
-            need_update = true;
-        }
-        if (auto_item_clean != auto_item_clean_new) {
-            auto_item_clean = auto_item_clean_new;
-            updated_config["auto_item_clean"] = auto_item_clean;
-            need_update = true;
-        }
-        if (entity_clean_whitelist != entity_clean_whitelist_new) {
-            entity_clean_whitelist = entity_clean_whitelist_new;
-            updated_config["entity_clean_whitelist"] = entity_clean_whitelist;
-            need_update = true;
-        }
-        if (item_clean_whitelist != item_clean_whitelist_new) {
-            item_clean_whitelist = item_clean_whitelist_new;
-            updated_config["item_clean_whitelist"] = item_clean_whitelist;
-            need_update = true;
-        }
-        if (clean_time != clean_time_new) {
-            clean_time = clean_time_new;
-            updated_config["clean_time"] = clean_time;
-            need_update = true;
-            if (clean_time >= 1) {
-                auto_clean_task->cancel();
-                std::uint64_t clean_pre_time = clean_time*60*20;
-                auto_clean_task = getServer().getScheduler().runTaskTimer(*this, [&]() { auto_clean(); }, 0, clean_pre_time);
+    menu.setOnSubmit([this](endstone::Player *p, const std::string &response) {
+        try {
+            const json values = json::parse(response);
+            json config = read_config();
+            if (config.contains("error")) {
+                p->sendErrorMessage("Failed to read ECleaner config.");
+                return;
             }
-        }
-        if (clean_tps != clean_tps_new) {
-            clean_tps = clean_tps_new;
-            updated_config["clean_tps"] = clean_tps;
-            need_update = true;
-        }
 
-        // 如果需要更新配置文件，则进行写入
-        if (need_update) {
-            if (std::ofstream outfile(config_path); outfile.is_open()) {
-                outfile << updated_config.dump(4);
-                outfile.close();
-                p->sendMessage(Tran.getLocal("Config file update over"));
-            }
+            auto_entity_clean = values.at(0).get<bool>();
+            auto_item_clean = values.at(1).get<bool>();
+            entity_clean_whitelist = values.at(2).get<bool>();
+            item_clean_whitelist = values.at(3).get<bool>();
+            item_clean_interval_seconds = std::clamp(values.at(4).get<int>(), 0, 3600);
+            entity_clean_interval_seconds = std::clamp(values.at(5).get<int>(), 0, 3600);
+            broadcast_cleanup_results = values.at(6).get<bool>();
+
+            config["auto_entity_clean"] = auto_entity_clean;
+            config["auto_item_clean"] = auto_item_clean;
+            config["entity_clean_whitelist"] = entity_clean_whitelist;
+            config["item_clean_whitelist"] = item_clean_whitelist;
+            config["item_clean_interval_seconds"] = item_clean_interval_seconds;
+            config["entity_clean_interval_seconds"] = entity_clean_interval_seconds;
+            config["broadcast_cleanup_results"] = broadcast_cleanup_results;
+            config.erase("clean_time");
+            config.erase("clean_tps");
+            config.erase("item_clean_list");
+
+            write_json_file(config_path, config);
+            schedule_cleanup_tasks();
+
+            p->sendMessage(Tran.getLocal("Config file update over"));
+        }
+        catch (const std::exception &e) {
+            p->sendErrorMessage(std::string("Failed to update ECleaner config: ") + e.what());
         }
     });
+
     player.sendForm(menu);
 }
 
-//插件信息
 ENDSTONE_PLUGIN("ecleaner", ECLEANER_PLUGIN_VERSION, ECleaner)
 {
-    description = "a plugin for endstone to clean entity";
+    description = "High-frequency dropped-item and entity cleanup for Endstone";
 
     command("ecl")
-            .description("ECleaner")
-            .usages("/ecl",
-                    "/ecl clean [entity|item]",
-                    "/ecl reload"
-                    )
-            .permissions("ecleaner.command.op");
+        .description("ECleaner")
+        .usages(
+            "/ecl",
+            "/ecl clean [entity|item]",
+            "/ecl reload"
+        )
+        .permissions("ecleaner.command.op");
 
     permission("ecleaner.command.op")
-            .description("ecl op command")
-            .default_(endstone::PermissionDefault::Operator);
+        .description("ECleaner operator command")
+        .default_(endstone::PermissionDefault::Operator);
 }
