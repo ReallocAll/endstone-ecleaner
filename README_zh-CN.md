@@ -7,12 +7,13 @@
 ECleaner 是一个面向 Endstone 的轻量实体清理插件。本分支从 0.2.0 起改为以服务器性能为优先的高频清理策略：
 
 - 掉落物与实体使用独立定时器。
-- 清理间隔使用“秒”，默认掉落物 10 秒、实体 60 秒。
+- 检查间隔使用“秒”，默认掉落物每 10 秒检查一次、实体每 60 秒检查一次；只有 MSPT 门控通过时才执行实际清理。
 - 默认静默清理，不再每轮播放声音或提前 30 秒广播。
 - 默认只清理明确配置在黑名单中的低价值掉落物和常见敌对生物。
 - 有自定义名称的实体不会被自动清理。
 - 服务器无人在线时跳过自动清理。
-- 不再使用 TPS 阈值触发清理，避免启动期/采样期 TPS 不稳定造成误触发。
+- 自动清理由 Spark MSPT 压力阈值控制：默认仅当最近 10 秒的 p95 MSPT ≥ 50 ms 时才执行，避免服务器健康时无意义地删除掉落物或刷怪塔产物。
+- 通过 Endstone PAPI 读取 Spark 占位符；PAPI/Spark 未就绪或 MSPT 数据不可用时自动清理会 fail-closed（跳过清理）。
 
 ## 安装
 
@@ -38,6 +39,9 @@ plugins/ecleaner/language/
     "item_clean_interval_seconds": 10,
     "entity_clean_interval_seconds": 60,
     "broadcast_cleanup_results": false,
+    "mspt_threshold": 50.0,
+    "mspt_window": "10s",
+    "mspt_statistic": "p95",
     "item_clean_whitelist": false,
     "item_clean_ids": [
         "minecraft:netherrack",
@@ -86,11 +90,17 @@ plugins/ecleaner/language/
 
 `auto_entity_clean`：是否启用定时实体清理。
 
-`item_clean_interval_seconds`：掉落物清理间隔，单位秒。设为 `0` 时关闭掉落物定时清理。
+`item_clean_interval_seconds`：掉落物自动清理的检查间隔，单位秒。默认每 10 秒检查一次 MSPT；只有达到阈值才执行清理。设为 `0` 时关闭掉落物定时清理。
 
-`entity_clean_interval_seconds`：实体清理间隔，单位秒。设为 `0` 时关闭实体定时清理。
+`entity_clean_interval_seconds`：实体自动清理的检查间隔，单位秒。默认每 60 秒检查一次 MSPT；只有达到阈值才执行清理。设为 `0` 时关闭实体定时清理。
 
 `broadcast_cleanup_results`：是否把每轮自动清理结果广播给全服。默认 `false`，即静默清理。
+
+`mspt_threshold`：自动清理启动阈值，单位 ms。默认 `50.0`。只有 Spark 返回的 MSPT 指标达到或超过该值时，定时清理才真正执行；设为 `0` 可关闭 MSPT 门控并恢复“到点就清”的行为。
+
+`mspt_window`：Spark MSPT 统计窗口，可选 `10s` 或 `1m`，默认 `10s`。
+
+`mspt_statistic`：从 Spark `{spark:tickduration_*}` 的 `min/median/p95/max` 四项中选择用于判定的指标，可选 `min`、`median`、`p95`、`max`，默认 `p95`。默认策略因此是“最近 10 秒 p95 MSPT ≥ 50 ms 才清理”。
 
 `item_clean_whitelist`：掉落物名单模式。为 `false` 时只有名单内物品会被删除；为 `true` 时名单内物品被保留、其他掉落物会被删除。
 
@@ -103,6 +113,8 @@ plugins/ecleaner/language/
 `entity_clean_list`：实体名单，使用实体 ID，例如 `minecraft:zombie`。
 
 自动实体清理会跳过带有自定义 NameTag 的实体。
+
+自动定时清理依赖 `papi` 与 `spark`。两者缺失、PAPI 服务未激活、Spark expansion 未注册、占位符尚无可用样本或返回值无法解析时，自动清理会直接跳过，不会在性能数据未知时删除实体。`/ecl clean`、`/ecl clean item`、`/ecl clean entity` 属于管理员手动操作，不受 MSPT 门控限制。
 
 ## 命令
 

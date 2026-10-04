@@ -6,13 +6,18 @@
 #include "ecleaner.h"
 #include "version.h"
 
+#include <endstone_papi/placeholder_api.h>
+
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -35,6 +40,9 @@ std::vector<std::string> entity_clean_list;
 int item_clean_interval_seconds = 10;
 int entity_clean_interval_seconds = 60;
 bool broadcast_cleanup_results = false;
+double mspt_threshold = 50.0;
+std::string mspt_window = "10s";
+std::string mspt_statistic = "p95";
 
 namespace {
 
@@ -156,6 +164,9 @@ json make_default_config()
         {"item_clean_interval_seconds", 10},
         {"entity_clean_interval_seconds", 60},
         {"broadcast_cleanup_results", false},
+        {"mspt_threshold", 50.0},
+        {"mspt_window", "10s"},
+        {"mspt_statistic", "p95"},
         {"item_clean_whitelist", false},
         {"item_clean_ids", kDefaultItemCleanIds},
         {"item_clean_legacy_names", json::array()},
@@ -219,6 +230,8 @@ void migrate_legacy_item_list(json &config, bool &changed)
     config.erase("item_clean_list");
     changed = true;
 }
+
+std::optional<std::size_t> mspt_statistic_index(std::string_view statistic);
 
 bool normalize_config(json &config)
 {
@@ -285,6 +298,34 @@ bool normalize_config(json &config)
         }
     }
 
+    if (!config["mspt_threshold"].is_number()) {
+        config["mspt_threshold"] = 50.0;
+        changed = true;
+    }
+    else {
+        double threshold = config["mspt_threshold"].get<double>();
+        if (!std::isfinite(threshold)) {
+            threshold = 50.0;
+        }
+        threshold = std::clamp(threshold, 0.0, 10000.0);
+        if (config["mspt_threshold"].get<double>() != threshold) {
+            config["mspt_threshold"] = threshold;
+            changed = true;
+        }
+    }
+
+    if (!config["mspt_window"].is_string()
+        || (config["mspt_window"] != "10s" && config["mspt_window"] != "1m")) {
+        config["mspt_window"] = "10s";
+        changed = true;
+    }
+
+    if (!config["mspt_statistic"].is_string()
+        || !mspt_statistic_index(config["mspt_statistic"].get<std::string>()).has_value()) {
+        config["mspt_statistic"] = "p95";
+        changed = true;
+    }
+
     return changed;
 }
 
@@ -306,6 +347,82 @@ void rebuild_lookup_sets()
 bool should_clean(bool whitelist_mode, bool listed)
 {
     return whitelist_mode ? !listed : listed;
+}
+
+std::string strip_minecraft_formatting(std::string_view input)
+{
+    std::string output;
+    output.reserve(input.size());
+
+    for (std::size_t i = 0; i < input.size();) {
+        const auto byte = static_cast<unsigned char>(input[i]);
+        if (byte == 0xC2 && i + 2 < input.size()
+            && static_cast<unsigned char>(input[i + 1]) == 0xA7) {
+            i += 3;  // UTF-8 section sign plus one formatting-code byte.
+            continue;
+        }
+        output.push_back(input[i]);
+        ++i;
+    }
+
+    return output;
+}
+
+std::optional<std::array<double, 4>> parse_spark_mspt(std::string_view formatted)
+{
+    const std::string plain = strip_minecraft_formatting(formatted);
+    std::array<double, 4> values{};
+
+    std::size_t start = 0;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        const std::size_t end = index + 1 == values.size() ? std::string::npos : plain.find('/', start);
+        if (end == std::string::npos && index + 1 != values.size()) {
+            return std::nullopt;
+        }
+
+        const std::string token = plain.substr(start, end == std::string::npos ? end : end - start);
+        try {
+            std::size_t consumed = 0;
+            const double value = std::stod(token, &consumed);
+            if (consumed != token.size() || !std::isfinite(value)) {
+                return std::nullopt;
+            }
+            values[index] = value;
+        }
+        catch (const std::exception &) {
+            return std::nullopt;
+        }
+
+        if (end == std::string::npos) {
+            start = plain.size();
+        }
+        else {
+            start = end + 1;
+        }
+    }
+
+    if (start != plain.size()) {
+        return std::nullopt;
+    }
+
+    return values;
+}
+
+std::optional<std::size_t> mspt_statistic_index(std::string_view statistic)
+{
+    if (statistic == "min") {
+        return 0;
+    }
+    if (statistic == "median") {
+        return 1;
+    }
+    if (statistic == "p95") {
+        return 2;
+    }
+    if (statistic == "max") {
+        return 3;
+    }
+    return std::nullopt;
 }
 
 void write_json_file(const std::string &path, const json &value)
@@ -398,6 +515,9 @@ bool ECleaner::load_config()
         entity_clean_interval_seconds =
             std::clamp(config.value("entity_clean_interval_seconds", 60), 0, 3600);
         broadcast_cleanup_results = config.value("broadcast_cleanup_results", false);
+        mspt_threshold = std::clamp(config.value("mspt_threshold", 50.0), 0.0, 10000.0);
+        mspt_window = config.value("mspt_window", std::string("10s"));
+        mspt_statistic = config.value("mspt_statistic", std::string("p95"));
 
         rebuild_lookup_sets();
 
@@ -466,9 +586,44 @@ int ECleaner::clean_entity() const
     return total_clean_num;
 }
 
+std::optional<double> ECleaner::query_mspt() const
+{
+    auto api = getServer().getServiceManager().load<papi::PlaceholderAPI>(
+        std::string(papi::PlaceholderAPI::ServiceName)
+    );
+    if (!api || !api->isActive() || !api->isRegistered("spark")) {
+        return std::nullopt;
+    }
+
+    const std::string placeholder =
+        mspt_window == "1m" ? "{spark:tickduration_1m}" : "{spark:tickduration_10s}";
+    const std::string resolved = api->setPlaceholders(nullptr, placeholder);
+    if (resolved == placeholder) {
+        return std::nullopt;
+    }
+
+    const auto values = parse_spark_mspt(resolved);
+    const auto index = mspt_statistic_index(mspt_statistic);
+    if (!values || !index) {
+        return std::nullopt;
+    }
+
+    return (*values)[*index];
+}
+
+bool ECleaner::should_run_automatic_cleanup() const
+{
+    if (mspt_threshold <= 0.0) {
+        return true;
+    }
+
+    const auto current_mspt = query_mspt();
+    return current_mspt.has_value() && *current_mspt >= mspt_threshold;
+}
+
 void ECleaner::run_scheduled_item_clean() const
 {
-    if (getServer().getOnlinePlayers().empty()) {
+    if (getServer().getOnlinePlayers().empty() || !should_run_automatic_cleanup()) {
         return;
     }
 
@@ -483,7 +638,7 @@ void ECleaner::run_scheduled_item_clean() const
 
 void ECleaner::run_scheduled_entity_clean() const
 {
-    if (getServer().getOnlinePlayers().empty()) {
+    if (getServer().getOnlinePlayers().empty() || !should_run_automatic_cleanup()) {
         return;
     }
 
@@ -545,10 +700,23 @@ void ECleaner::onEnable()
 
     schedule_cleanup_tasks();
 
+    auto papi_api = getServer().getServiceManager().load<papi::PlaceholderAPI>(
+        std::string(papi::PlaceholderAPI::ServiceName)
+    );
+    if (mspt_threshold > 0.0
+        && (!papi_api || !papi_api->isActive() || !papi_api->isRegistered("spark"))) {
+        getLogger().warning(
+            "MSPT guard is enabled, but PAPI/Spark data is unavailable. "
+            "Automatic cleanup will fail closed until {spark:tickduration_*} resolves."
+        );
+    }
+
     getLogger().info(
         "ECleaner " + getDescription().getVersion()
         + " enabled: item interval=" + std::to_string(item_clean_interval_seconds)
-        + "s, entity interval=" + std::to_string(entity_clean_interval_seconds) + "s."
+        + "s, entity interval=" + std::to_string(entity_clean_interval_seconds)
+        + "s, mspt guard=" + std::to_string(mspt_threshold)
+        + "ms (" + mspt_window + " " + mspt_statistic + ")."
     );
 }
 
@@ -732,6 +900,7 @@ void ECleaner::ecl_main_menu(endstone::Player &player)
 ENDSTONE_PLUGIN("ecleaner", ECLEANER_PLUGIN_VERSION, ECleaner)
 {
     description = "High-frequency dropped-item and entity cleanup for Endstone";
+    soft_depend = {"papi", "spark"};
 
     command("ecl")
         .description("ECleaner")
