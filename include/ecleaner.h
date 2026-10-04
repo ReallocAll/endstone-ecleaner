@@ -9,6 +9,7 @@
 #include <endstone/plugin/plugin.h>
 #include <nlohmann/json.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,9 @@ extern std::vector<std::string> entity_clean_list;
 extern int item_clean_interval_seconds;
 extern int entity_clean_interval_seconds;
 extern bool broadcast_cleanup_results;
+extern double mspt_threshold;
+extern std::string mspt_window;
+extern std::string mspt_statistic;
 
 class ECleaner : public endstone::Plugin {
 public:
@@ -45,6 +49,9 @@ public:
 
     [[nodiscard]] int clean_item() const;
     [[nodiscard]] int clean_entity() const;
+
+    [[nodiscard]] std::optional<double> query_mspt() const;
+    [[nodiscard]] bool should_run_automatic_cleanup() const;
 
     void run_scheduled_item_clean() const;
     void run_scheduled_entity_clean() const;
