@@ -8,6 +8,7 @@
 #include <endstone/endstone.hpp>
 #include <endstone/plugin/plugin.h>
 #include <nlohmann/json.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
