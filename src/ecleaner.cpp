@@ -60,10 +60,15 @@ const std::vector<std::string> kDefaultEntityCleanList = {
     "minecraft:skeleton",
     "minecraft:creeper",
     "minecraft:spider",
+    "minecraft:cave_spider",
     "minecraft:husk",
     "minecraft:drowned",
     "minecraft:stray",
     "minecraft:bogged",
+    "minecraft:witch",
+    "minecraft:slime",
+    "minecraft:magma_cube",
+    "minecraft:zombie_pigman",
     "minecraft:phantom",
 };
 
