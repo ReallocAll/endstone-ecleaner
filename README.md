@@ -39,26 +39,27 @@ plugins/ecleaner/language/
     "entity_clean_interval_seconds": 60,
     "broadcast_cleanup_results": false,
     "item_clean_whitelist": false,
-    "item_clean_list": [
-        "Netherrack",
-        "Cobblestone",
-        "Cobbled Deepslate",
-        "Stone",
-        "Deepslate",
-        "Dirt",
-        "Grass Block",
-        "Gravel",
-        "Tuff",
-        "Granite",
-        "Diorite",
-        "Andesite",
-        "Calcite",
-        "Basalt",
-        "Blackstone",
-        "End Stone",
-        "Sandstone",
-        "Red Sandstone"
+    "item_clean_ids": [
+        "minecraft:netherrack",
+        "minecraft:cobblestone",
+        "minecraft:cobbled_deepslate",
+        "minecraft:stone",
+        "minecraft:deepslate",
+        "minecraft:dirt",
+        "minecraft:grass_block",
+        "minecraft:gravel",
+        "minecraft:tuff",
+        "minecraft:granite",
+        "minecraft:diorite",
+        "minecraft:andesite",
+        "minecraft:calcite",
+        "minecraft:basalt",
+        "minecraft:blackstone",
+        "minecraft:end_stone",
+        "minecraft:sandstone",
+        "minecraft:red_sandstone"
     ],
+    "item_clean_legacy_names": [],
     "entity_clean_whitelist": false,
     "entity_clean_list": [
         "minecraft:zombie",
@@ -93,7 +94,9 @@ plugins/ecleaner/language/
 
 `item_clean_whitelist`: When `false`, only items in `item_clean_list` are removed. When `true`, listed items are preserved and other dropped items are removed.
 
-`item_clean_list`: Uses dropped-item English display names rather than item IDs.
+`item_clean_ids`: Uses stable ItemType IDs such as `minecraft:netherrack`; matching no longer depends on an English display name or client language.
+
+`item_clean_legacy_names`: Compatibility-only fallback for legacy custom English names that cannot be mapped to an ItemType ID. New configs normally keep this empty.
 
 `entity_clean_whitelist`: When `false`, only entities in `entity_clean_list` are removed. When `true`, listed entities are preserved and other unnamed entities are removed.
 
@@ -141,6 +144,6 @@ Reload configuration and safely cancel/recreate both scheduled tasks.
 
 - An untouched 0.1.x default config is migrated to the new performance-first defaults: 10 seconds for items and 60 seconds for entities. The old shulker-box whitelist is also replaced with the low-value item blacklist so high-frequency cleanup does not delete almost every dropped item.
 - A customized legacy `clean_time` is converted from minutes to seconds and applied to both new schedules; `clean_time = 0` remains disabled.
-- Customized blacklist/whitelist modes and list contents are preserved.
+- Customized blacklist/whitelist modes and list contents are preserved where possible. Legacy `item_clean_list` entries are migrated to stable ItemType IDs; unknown custom English names are retained in `item_clean_legacy_names` as a compatibility fallback.
 
 If the old config is no longer useful, remove `plugins/ecleaner/config.json` and restart to regenerate the 0.2.0 defaults.
