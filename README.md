@@ -14,6 +14,8 @@ ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's
 - Automatic cleanup is skipped while the server has no online players.
 - Scheduled cleanup is gated by Spark MSPT pressure: by default it only runs when the 10-second p95 MSPT is at least 50 ms.
 - MSPT is read from Spark through Endstone PAPI. If PAPI/Spark is unavailable or the MSPT value is unresolved, automatic cleanup fails closed and skips deletion.
+- 0.3.0 adds an MSPT-independent Chunk Entity Guard with per-type, per-chunk, and 3x3 density fuses for runaway mob reactors/farms.
+- A shared high-value entity protection policy preserves villagers, pets, mounts, allays, shulkers, named mobs, and actors tagged `ecleaner_protect` by default. Protected mobs still count toward pressure.
 
 ## Installation
 
@@ -79,8 +81,67 @@ plugins/ecleaner/language/
         "minecraft:slime",
         "minecraft:magma_cube",
         "minecraft:zombie_pigman",
+        "minecraft:zombified_piglin",
         "minecraft:phantom"
-    ]
+    ],
+    "entity_protection": {
+        "enabled": true,
+        "protect_named": true,
+        "protect_tag": "ecleaner_protect",
+        "types": [
+            "minecraft:villager",
+            "minecraft:villager_v2",
+            "minecraft:zombie_villager",
+            "minecraft:allay",
+            "minecraft:horse",
+            "minecraft:donkey",
+            "minecraft:mule",
+            "minecraft:camel",
+            "minecraft:llama",
+            "minecraft:trader_llama",
+            "minecraft:wolf",
+            "minecraft:cat",
+            "minecraft:parrot",
+            "minecraft:sniffer",
+            "minecraft:iron_golem",
+            "minecraft:snow_golem",
+            "minecraft:shulker"
+        ]
+    },
+    "chunk_entity_guard": {
+        "enabled": true,
+        "reconcile_interval_ticks": 20,
+        "type_limits": {
+            "minecraft:slime": 48,
+            "minecraft:silverfish": 64,
+            "minecraft:magma_cube": 48
+        },
+        "cleanable_types": [
+            "minecraft:zombie",
+            "minecraft:skeleton",
+            "minecraft:creeper",
+            "minecraft:spider",
+            "minecraft:cave_spider",
+            "minecraft:husk",
+            "minecraft:drowned",
+            "minecraft:stray",
+            "minecraft:bogged",
+            "minecraft:witch",
+            "minecraft:slime",
+            "minecraft:magma_cube",
+            "minecraft:silverfish",
+            "minecraft:endermite",
+            "minecraft:zombie_pigman",
+            "minecraft:zombified_piglin",
+            "minecraft:phantom"
+        ],
+        "cleanable_mob_limit_per_chunk": 96,
+        "total_mob_limit_per_chunk": 160,
+        "cleanable_mob_limit_3x3": 256,
+        "emergency_delete_protected_mobs": false,
+        "log_triggers": true,
+        "log_cooldown_seconds": 10
+    }
 }
 ```
 
@@ -112,7 +173,21 @@ plugins/ecleaner/language/
 
 `entity_clean_list`: Uses entity IDs such as `minecraft:zombie`.
 
-Automatic entity cleanup skips entities with a custom NameTag.
+### High-value entity protection
+
+`entity_protection.enabled` enables the shared protection policy used by both MSPT entity cleanup and the Chunk Entity Guard. Protected types, named mobs (`protect_named`), and actors carrying the configured `protect_tag` (`ecleaner_protect` by default) are preserved. Protected mobs still count toward density/pressure.
+
+### Chunk Entity Guard
+
+The guard is independent from the Spark/PAPI MSPT gate. `reconcile_interval_ticks` defaults to 20 ticks, while ActorSpawnEvent/ActorRemoveEvent maintain a fast-path counter and threshold crossings request a next-tick reconciliation.
+
+`type_limits` defaults to 48 slimes, 64 silverfish, and 48 magma cubes per chunk. Hitting a type limit clears the unprotected mobs of that type in the chunk rather than trimming to the threshold.
+
+`cleanable_mob_limit_per_chunk` defaults to 96, `total_mob_limit_per_chunk` to 160, and `cleanable_mob_limit_3x3` to 256. The 3x3 fuse prevents distributing one reactor across chunk borders.
+
+`emergency_delete_protected_mobs` defaults to `false`. When false, even the 160-Mob emergency fuse preserves protected mobs; setting it to `true` explicitly allows the emergency fuse to remove them. Players are never removed.
+
+`log_triggers` and `log_cooldown_seconds` only rate-limit repeated logs; they never pause enforcement.
 
 Scheduled cleanup depends on `papi` and `spark`. If either is missing, PAPI is inactive, the Spark expansion is not registered, the placeholder has no usable samples yet, or the returned value cannot be parsed, scheduled cleanup is skipped. Manual operator commands (`/ecl clean`, `/ecl clean item`, `/ecl clean entity`) bypass the MSPT gate.
 
@@ -158,4 +233,4 @@ Reload configuration and safely cancel/recreate both scheduled tasks.
 - A customized legacy `clean_time` is converted from minutes to seconds and applied to both new schedules; `clean_time = 0` remains disabled.
 - Customized blacklist/whitelist modes and list contents are preserved where possible. Legacy `item_clean_list` entries are migrated to stable ItemType IDs; unknown custom English names are retained in `item_clean_legacy_names` as a compatibility fallback.
 
-If the old config is no longer useful, remove `plugins/ecleaner/config.json` and restart to regenerate the 0.2.0 defaults.
+Upgrading a 0.2.x config to 0.3.0 automatically adds `entity_protection` and `chunk_entity_guard` while preserving existing cleanup lists and MSPT settings. If the old config is no longer useful, remove `plugins/ecleaner/config.json` and restart to regenerate the current defaults.
