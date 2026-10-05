@@ -172,6 +172,8 @@ json make_default_config()
         {"item_clean_legacy_names", json::array()},
         {"entity_clean_whitelist", false},
         {"entity_clean_list", kDefaultEntityCleanList},
+        {"entity_protection", ChunkEntityGuard::defaultProtectionConfig()},
+        {"chunk_entity_guard", ChunkEntityGuard::defaultGuardConfig()},
     };
 }
 
@@ -290,6 +292,9 @@ bool normalize_config(json &config)
     }
 
     migrate_legacy_item_list(config, changed);
+    if (ChunkEntityGuard::normalizeRootConfig(config)) {
+        changed = true;
+    }
 
     for (const auto &[key, value] : defaults.items()) {
         if (!config.contains(key)) {
@@ -520,6 +525,9 @@ bool ECleaner::load_config()
         mspt_statistic = config.value("mspt_statistic", std::string("p95"));
 
         rebuild_lookup_sets();
+        if (chunk_entity_guard_) {
+            chunk_entity_guard_->configure(config);
+        }
 
         const std::string language = config.value("language", std::string("zh_CN"));
         language_file = language_path + language + ".json";
@@ -570,8 +578,13 @@ int ECleaner::clean_entity() const
             continue;
         }
 
-        // Named entities are assumed to be intentionally kept by players.
-        if (!actor->getNameTag().empty()) {
+        // Shared high-value protection applies to both MSPT cleanup and the
+        // chunk safety guard, so whitelist mode cannot accidentally remove
+        // villagers, pets, named mobs, or explicitly protected actors.
+        if (chunk_entity_guard_ && chunk_entity_guard_->isProtected(*actor)) {
+            continue;
+        }
+        if (!chunk_entity_guard_ && !actor->getNameTag().empty()) {
             continue;
         }
 
@@ -690,15 +703,22 @@ void ECleaner::onLoad()
 
 void ECleaner::onEnable()
 {
+    chunk_entity_guard_ = std::make_unique<ChunkEntityGuard>(*this);
+
     if (!load_config()) {
         getLogger().warning("ECleaner config could not be loaded; using in-memory defaults.");
         item_clean_ids = kDefaultItemCleanIds;
         item_clean_legacy_names.clear();
         entity_clean_list = kDefaultEntityCleanList;
         rebuild_lookup_sets();
+
+        json defaults = make_default_config();
+        ChunkEntityGuard::normalizeRootConfig(defaults);
+        chunk_entity_guard_->configure(defaults);
     }
 
     schedule_cleanup_tasks();
+    chunk_entity_guard_->start();
 
     auto papi_api = getServer().getServiceManager().load<papi::PlaceholderAPI>(
         std::string(papi::PlaceholderAPI::ServiceName)
@@ -716,12 +736,17 @@ void ECleaner::onEnable()
         + " enabled: item interval=" + std::to_string(item_clean_interval_seconds)
         + "s, entity interval=" + std::to_string(entity_clean_interval_seconds)
         + "s, mspt guard=" + std::to_string(mspt_threshold)
-        + "ms (" + mspt_window + " " + mspt_statistic + ")."
+        + "ms (" + mspt_window + " " + mspt_statistic + ")"
+        + ", chunk entity guard=loaded."
     );
 }
 
 void ECleaner::onDisable()
 {
+    if (chunk_entity_guard_) {
+        chunk_entity_guard_->stop();
+    }
+
     if (item_clean_task) {
         item_clean_task->cancel();
         item_clean_task.reset();
@@ -759,6 +784,9 @@ bool ECleaner::onCommand(
         }
 
         schedule_cleanup_tasks();
+        if (chunk_entity_guard_) {
+            chunk_entity_guard_->reschedule();
+        }
         sender.sendMessage(Tran.getLocal("Reload completed."));
         return true;
     }
