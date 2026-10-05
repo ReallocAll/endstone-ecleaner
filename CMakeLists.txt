@@ -43,7 +43,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(fmt)
 
-endstone_add_plugin(${PROJECT_NAME} src/ecleaner.cpp)
+endstone_add_plugin(${PROJECT_NAME} src/ecleaner.cpp src/chunk_entity_guard.cpp)
 
 target_include_directories(${PROJECT_NAME}
         PRIVATE
@@ -95,7 +95,7 @@ else()
 endif()
 
 # 基础版本（主版本号）
-set(BASE_VERSION "0.2.1")
+set(BASE_VERSION "0.3.0")
 
 # 检查是否为正式发布版本
 if(RELEASE_VERSION)
