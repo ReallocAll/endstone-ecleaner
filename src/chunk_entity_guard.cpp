@@ -296,6 +296,11 @@ void ChunkEntityGuard::reschedule()
         reconcile_task_->cancel();
         reconcile_task_.reset();
     }
+    if (immediate_task_) {
+        immediate_task_->cancel();
+        immediate_task_.reset();
+        immediate_reconcile_pending_ = false;
+    }
 
     chunk_counts_.clear();
     actor_states_.clear();
@@ -318,6 +323,10 @@ void ChunkEntityGuard::stop()
     if (reconcile_task_) {
         reconcile_task_->cancel();
         reconcile_task_.reset();
+    }
+    if (immediate_task_) {
+        immediate_task_->cancel();
+        immediate_task_.reset();
     }
     started_ = false;
     enabled_ = false;
@@ -556,8 +565,9 @@ void ChunkEntityGuard::requestImmediateReconcile()
     }
 
     immediate_reconcile_pending_ = true;
-    plugin_.getServer().getScheduler().runTask(plugin_, [this]() {
+    immediate_task_ = plugin_.getServer().getScheduler().runTask(plugin_, [this]() {
         immediate_reconcile_pending_ = false;
+        immediate_task_.reset();
         if (started_ && enabled_) {
             reconcile();
         }
@@ -716,13 +726,13 @@ bool ChunkEntityGuard::shouldLog(const Trigger &trigger)
 
     const std::uint64_t now = steadyMillis();
     const std::uint64_t cooldown = static_cast<std::uint64_t>(log_cooldown_seconds_) * 1000;
-    if (const auto it = last_log_generation_.find(key); it != last_log_generation_.end()) {
+    if (const auto it = last_log_millis_.find(key); it != last_log_millis_.end()) {
         if (cooldown > 0 && now - it->second < cooldown) {
             return false;
         }
     }
 
-    last_log_generation_[std::move(key)] = now;
+    last_log_millis_[std::move(key)] = now;
     return true;
 }
 
