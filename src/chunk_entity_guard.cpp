@@ -290,13 +290,18 @@ void ChunkEntityGuard::start()
 
     reschedule();
 
-    plugin_.getLogger().info(
-        "Chunk entity guard enabled: reconcile=" + std::to_string(reconcile_interval_ticks_)
-        + "t, type limits=" + std::to_string(type_limits_.size())
-        + ", chunk cleanable=" + std::to_string(cleanable_mob_limit_per_chunk_)
-        + ", chunk total=" + std::to_string(total_mob_limit_per_chunk_)
-        + ", 3x3 cleanable=" + std::to_string(cleanable_mob_limit_3x3_) + "."
-    );
+    if (enabled_) {
+        plugin_.getLogger().info(
+            "Chunk entity guard enabled: reconcile=" + std::to_string(reconcile_interval_ticks_)
+            + "t, type limits=" + std::to_string(type_limits_.size())
+            + ", chunk cleanable=" + std::to_string(cleanable_mob_limit_per_chunk_)
+            + ", chunk total=" + std::to_string(total_mob_limit_per_chunk_)
+            + ", 3x3 cleanable=" + std::to_string(cleanable_mob_limit_3x3_) + "."
+        );
+    }
+    else {
+        plugin_.getLogger().info("Chunk entity guard is disabled by configuration.");
+    }
 }
 
 void ChunkEntityGuard::reschedule()
