@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <limits>
 #include <string>
 #include <utility>
 
@@ -74,16 +73,21 @@ std::vector<std::string> sanitizeStringArray(const json &value)
 
 int normalizedInteger(json &object, const char *key, int fallback, int minimum, int maximum, bool &changed)
 {
-    int value = fallback;
+    std::int64_t raw = fallback;
     if (object.contains(key) && object[key].is_number_integer()) {
-        value = object[key].get<int>();
+        raw = object[key].get<std::int64_t>();
     }
     else {
         changed = true;
     }
 
-    value = std::clamp(value, minimum, maximum);
-    if (!object.contains(key) || !object[key].is_number_integer() || object[key].get<int>() != value) {
+    const auto clamped = std::clamp(
+        raw,
+        static_cast<std::int64_t>(minimum),
+        static_cast<std::int64_t>(maximum)
+    );
+    const int value = static_cast<int>(clamped);
+    if (!object.contains(key) || !object[key].is_number_integer() || raw != clamped) {
         object[key] = value;
         changed = true;
     }
@@ -211,10 +215,10 @@ bool ChunkEntityGuard::normalizeRootConfig(nlohmann::json &root)
                 continue;
             }
 
-            const int raw = it.value().get<int>();
-            const int value = std::clamp(raw, 0, 100000);
-            if (value != raw) {
-                it.value() = value;
+            const auto raw = it.value().get<std::int64_t>();
+            const auto clamped = std::clamp<std::int64_t>(raw, 0, 100000);
+            if (clamped != raw) {
+                it.value() = static_cast<int>(clamped);
                 changed = true;
             }
             ++it;
@@ -876,7 +880,6 @@ void ChunkEntityGuard::reconcile()
         return;
     }
 
-    ++reconcile_generation_;
     std::vector<ActorRecord> records;
     rebuildSnapshot(records);
 
