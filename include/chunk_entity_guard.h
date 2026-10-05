@@ -98,6 +98,7 @@ private:
 
     endstone::Plugin &plugin_;
     std::shared_ptr<endstone::Task> reconcile_task_;
+    std::shared_ptr<endstone::Task> immediate_task_;
     bool started_{false};
     bool immediate_reconcile_pending_{false};
 
@@ -119,6 +120,6 @@ private:
 
     std::unordered_map<ChunkKey, ChunkCounter, ChunkKeyHash> chunk_counts_;
     std::unordered_map<std::uint64_t, ActorState> actor_states_;
-    std::unordered_map<std::string, std::uint64_t> last_log_generation_;
+    std::unordered_map<std::string, std::uint64_t> last_log_millis_;
     std::uint64_t reconcile_generation_{0};
 };
