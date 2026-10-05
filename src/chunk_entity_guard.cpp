@@ -16,6 +16,7 @@ const std::vector<std::string> kDefaultProtectedTypes = {
     "minecraft:villager",
     "minecraft:villager_v2",
     "minecraft:zombie_villager",
+    "minecraft:zombie_villager_v2",
     "minecraft:allay",
     "minecraft:horse",
     "minecraft:donkey",
@@ -288,6 +289,14 @@ void ChunkEntityGuard::start()
     );
 
     reschedule();
+
+    plugin_.getLogger().info(
+        "Chunk entity guard enabled: reconcile=" + std::to_string(reconcile_interval_ticks_)
+        + "t, type limits=" + std::to_string(type_limits_.size())
+        + ", chunk cleanable=" + std::to_string(cleanable_mob_limit_per_chunk_)
+        + ", chunk total=" + std::to_string(total_mob_limit_per_chunk_)
+        + ", 3x3 cleanable=" + std::to_string(cleanable_mob_limit_3x3_) + "."
+    );
 }
 
 void ChunkEntityGuard::reschedule()
@@ -567,7 +576,6 @@ void ChunkEntityGuard::requestImmediateReconcile()
     immediate_reconcile_pending_ = true;
     immediate_task_ = plugin_.getServer().getScheduler().runTask(plugin_, [this]() {
         immediate_reconcile_pending_ = false;
-        immediate_task_.reset();
         if (started_ && enabled_) {
             reconcile();
         }
