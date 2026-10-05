@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "chunk_entity_guard.h"
 #include "translate.hpp"
 
 using json = nlohmann::json;
@@ -67,4 +68,7 @@ public:
     ) override;
 
     void ecl_main_menu(endstone::Player &player);
+
+private:
+    std::unique_ptr<ChunkEntityGuard> chunk_entity_guard_;
 };
