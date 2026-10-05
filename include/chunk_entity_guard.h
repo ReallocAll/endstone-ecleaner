@@ -121,5 +121,4 @@ private:
     std::unordered_map<ChunkKey, ChunkCounter, ChunkKeyHash> chunk_counts_;
     std::unordered_map<std::uint64_t, ActorState> actor_states_;
     std::unordered_map<std::string, std::uint64_t> last_log_millis_;
-    std::uint64_t reconcile_generation_{0};
 };
