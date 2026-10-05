@@ -92,7 +92,8 @@ plugins/ecleaner/language/
             "minecraft:villager",
             "minecraft:villager_v2",
             "minecraft:zombie_villager",
-            "minecraft:allay",
+            "minecraft:zombie_villager_v2",
+            "minecraft:allay"
             "minecraft:horse",
             "minecraft:donkey",
             "minecraft:mule",
