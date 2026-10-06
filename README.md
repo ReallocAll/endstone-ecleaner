@@ -14,8 +14,9 @@ ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's
 - Automatic cleanup is skipped while the server has no online players.
 - Scheduled cleanup is gated by Spark MSPT pressure: by default it only runs when the 10-second p95 MSPT is at least 50 ms.
 - MSPT is read from Spark through Endstone PAPI. If PAPI/Spark is unavailable or the MSPT value is unresolved, automatic cleanup fails closed and skips deletion.
-- 0.3.0 adds an MSPT-independent Chunk Entity Guard with per-type, per-chunk, and 3x3 density fuses for runaway mob reactors/farms.
+- 0.3.1 adds an MSPT-aware Chunk Entity Guard with pressure limits plus unconditional hard safety caps for runaway mob reactors/farms.
 - A shared high-value entity protection policy preserves villagers, pets, mounts, allays, shulkers, named mobs, and actors tagged `ecleaner_protect` by default. Protected mobs still count toward pressure.
+- 0.3.2 adds adaptive `falling_block` throttling for sand/gravity-block dupers: production is unlimited while MSPT is healthy, then backs off exponentially under pressure without dropping below a configured production floor.
 
 ## Installation
 
@@ -247,4 +248,4 @@ Reload configuration and safely cancel/recreate both scheduled tasks.
 - A customized legacy `clean_time` is converted from minutes to seconds and applied to both new schedules; `clean_time = 0` remains disabled.
 - Customized blacklist/whitelist modes and list contents are preserved where possible. Legacy `item_clean_list` entries are migrated to stable ItemType IDs; unknown custom English names are retained in `item_clean_legacy_names` as a compatibility fallback.
 
-Upgrading a 0.3.0 config migrates the old chunk limits into the new pressure-limit fields without changing custom values, then adds the new hard-limit safety tier. Removing `plugins/ecleaner/config.json` and restarting regenerates the new 0.3.1 observation defaults.
+Upgrading a 0.3.0 config migrates the old chunk limits into the new pressure-limit fields without changing custom values, then adds the new hard-limit safety tier. Removing `plugins/ecleaner/config.json` and restarting regenerates the current 0.3.2 defaults, including the adaptive falling-block guard.
