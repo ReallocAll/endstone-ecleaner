@@ -97,7 +97,7 @@ nlohmann::json FallingBlockGuard::defaultConfig()
         {"recovery_factor", 2.0},
         {"recovery_stable_intervals", 5},
         {"min_rate_per_second", 16.0},
-        {"activation_rate_per_second", 8.0},
+        {"activation_rate_per_second", 16.0},
         {"burst_capacity", 32.0},
         {"log_adjustments", true},
     };
@@ -130,7 +130,7 @@ bool FallingBlockGuard::normalizeRootConfig(nlohmann::json &root)
     normalizedDouble(guard, "recovery_factor", 2.0, 1.01, 10.0, changed);
     normalizedInteger(guard, "recovery_stable_intervals", 5, 1, 600, changed);
     normalizedDouble(guard, "min_rate_per_second", 16.0, 0.1, 100000.0, changed);
-    normalizedDouble(guard, "activation_rate_per_second", 8.0, 0.0, 100000.0, changed);
+    normalizedDouble(guard, "activation_rate_per_second", 16.0, 0.0, 100000.0, changed);
     normalizedDouble(guard, "burst_capacity", 32.0, 1.0, 100000.0, changed);
     normalizedBoolean(guard, "log_adjustments", true, changed);
 
@@ -160,7 +160,7 @@ void FallingBlockGuard::configure(const nlohmann::json &root)
     min_rate_per_second_ =
         std::clamp(guard.value("min_rate_per_second", 16.0), 0.1, 100000.0);
     activation_rate_per_second_ =
-        std::clamp(guard.value("activation_rate_per_second", 8.0), 0.0, 100000.0);
+        std::clamp(guard.value("activation_rate_per_second", 16.0), 0.0, 100000.0);
     burst_capacity_ =
         std::clamp(guard.value("burst_capacity", 32.0), 1.0, 100000.0);
 
