@@ -104,6 +104,9 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure -C Release
+
       # ===== Prepare plugin artifact (Linux) =====
       - name: Prepare plugin artifact (Linux)
         if: runner.os == 'Linux'
