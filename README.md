@@ -94,7 +94,7 @@ plugins/ecleaner/language/
             "minecraft:villager_v2",
             "minecraft:zombie_villager",
             "minecraft:zombie_villager_v2",
-            "minecraft:allay"
+            "minecraft:allay",
             "minecraft:horse",
             "minecraft:donkey",
             "minecraft:mule",
@@ -152,6 +152,19 @@ plugins/ecleaner/language/
         "emergency_delete_protected_mobs": false,
         "log_triggers": true,
         "log_cooldown_seconds": 10
+    },
+    "falling_block_guard": {
+        "enabled": true,
+        "control_interval_ticks": 20,
+        "pressure_mspt_threshold": 50.0,
+        "recovery_mspt_threshold": 45.0,
+        "backoff_factor": 0.5,
+        "recovery_factor": 2.0,
+        "recovery_stable_intervals": 5,
+        "min_rate_per_second": 16.0,
+        "activation_rate_per_second": 16.0,
+        "burst_capacity": 32.0,
+        "log_adjustments": true
     }
 }
 ```
@@ -203,6 +216,21 @@ If Spark/PAPI data is unavailable, pressure-tier cleanup fails closed and does n
 `emergency_delete_protected_mobs` defaults to `false`. Protected mobs are counted toward density but are preserved by default; setting this option to `true` allows chunk-total pressure/hard fuses to remove them. Players are never removed.
 
 Trigger logs identify whether the event was `pressure` or `hard` and include the sampled MSPT when available. `log_triggers` and `log_cooldown_seconds` only rate-limit repeated logs; they never pause enforcement.
+
+### Falling Block Guard
+
+The falling-block guard is a feedback rate controller rather than a static entity-count limiter. It watches `minecraft:falling_block` spawn attempts per dimension and samples the configured Spark MSPT statistic once per control interval.
+
+While MSPT is below `pressure_mspt_threshold` (default 50 ms), falling-block production is unrestricted. When MSPT reaches the pressure threshold and a dimension is producing at least `activation_rate_per_second` (default 16/s), the allowed spawn rate is multiplied by `backoff_factor` (default 0.5) each control interval until MSPT recovers or the configured production floor is reached.
+
+The default floor is `min_rate_per_second = 16`, equivalent to 57,600 falling blocks/hour. This preserves a useful baseline output instead of shutting gravity-block farms down completely. A token bucket with `burst_capacity = 32` smooths short bursts.
+
+Recovery is slower than backoff. MSPT must remain at or below `recovery_mspt_threshold` (default 45 ms) for `recovery_stable_intervals = 5` control intervals before the allowed rate is multiplied by `recovery_factor = 2`. Once the next recovery step can satisfy observed unconstrained demand, throttling is removed entirely.
+
+The controller is per dimension, so a runaway End sand duper does not spend the Overworld's allowance. Spawn attempts are counted before rejection, allowing the controller to estimate unconstrained demand while throttled. PAPI/Spark is never queried from the spawn callback; it is queried once per control interval. If MSPT becomes temporarily unavailable, no new throttle is introduced and an existing throttle holds its current rate until feedback returns.
+
+The adaptive path does not delete already-existing falling-block entities. It only rejects excess new spawns while throttled.
+
 
 Scheduled cleanup depends on `papi` and `spark`. If either is missing, PAPI is inactive, the Spark expansion is not registered, the placeholder has no usable samples yet, or the returned value cannot be parsed, scheduled cleanup is skipped. Manual operator commands (`/ecl clean`, `/ecl clean item`, `/ecl clean entity`) bypass the MSPT gate.
 
