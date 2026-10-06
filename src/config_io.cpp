@@ -33,17 +33,17 @@ json nodeToJson(const toml::node &node)
         return result;
     }
 
-    if (const auto value = node.value<std::string>()) {
-        return *value;
+    if (const auto *value = node.as_string()) {
+        return value->get();
     }
-    if (const auto value = node.value<std::int64_t>()) {
-        return *value;
+    if (const auto *value = node.as_integer()) {
+        return value->get();
     }
-    if (const auto value = node.value<double>()) {
-        return *value;
+    if (const auto *value = node.as_floating_point()) {
+        return value->get();
     }
-    if (const auto value = node.value<bool>()) {
-        return *value;
+    if (const auto *value = node.as_boolean()) {
+        return value->get();
     }
 
     throw std::runtime_error("unsupported TOML value type");
