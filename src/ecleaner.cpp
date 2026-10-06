@@ -4,6 +4,7 @@
 //
 
 #include "ecleaner.h"
+#include "config_io.h"
 #include "version.h"
 
 #include <endstone_papi/placeholder_api.h>
@@ -25,7 +26,7 @@
 translate Tran;
 
 const std::string data_path = "plugins/ecleaner";
-const std::string config_path = "plugins/ecleaner/config.json";
+const std::string config_path = "plugins/ecleaner/config.toml";
 
 std::shared_ptr<endstone::Task> item_clean_task;
 std::shared_ptr<endstone::Task> entity_clean_task;
@@ -434,15 +435,6 @@ std::optional<std::size_t> mspt_statistic_index(std::string_view statistic)
     return std::nullopt;
 }
 
-void write_json_file(const std::string &path, const json &value)
-{
-    std::ofstream out(path);
-    if (!out.is_open()) {
-        throw std::runtime_error("failed to open config file for writing");
-    }
-    out << value.dump(4);
-}
-
 }  // namespace
 
 void ECleaner::datafile_check() const
@@ -454,7 +446,7 @@ void ECleaner::datafile_check() const
 
     if (!std::filesystem::exists(config_path)) {
         try {
-            write_json_file(config_path, defaults);
+            ecleaner::config::writeTomlFile(config_path, defaults);
             getLogger().info("Created default ECleaner config.");
         }
         catch (const std::exception &e) {
@@ -464,13 +456,11 @@ void ECleaner::datafile_check() const
     }
 
     try {
-        std::ifstream file(config_path);
-        json loaded_config;
-        file >> loaded_config;
+        json loaded_config = ecleaner::config::readTomlFile(config_path);
 
         if (normalize_config(loaded_config)) {
-            write_json_file(config_path, loaded_config);
-            getLogger().info("Migrated ECleaner config to the high-frequency cleanup schema.");
+            ecleaner::config::writeTomlFile(config_path, loaded_config);
+            getLogger().info("Normalized ECleaner TOML config.");
         }
     }
     catch (const std::exception &e) {
@@ -481,14 +471,7 @@ void ECleaner::datafile_check() const
 json ECleaner::read_config() const
 {
     try {
-        std::ifstream file(config_path);
-        if (!file.is_open()) {
-            throw std::runtime_error("config file could not be opened");
-        }
-
-        json value;
-        file >> value;
-        return value;
+        return ecleaner::config::readTomlFile(config_path);
     }
     catch (const std::exception &e) {
         getLogger().error(std::string("Failed to read ECleaner config: ") + e.what());
@@ -505,8 +488,8 @@ bool ECleaner::load_config()
 
     try {
         if (normalize_config(config)) {
-            write_json_file(config_path, config);
-            getLogger().info("Migrated ECleaner config during reload.");
+            ecleaner::config::writeTomlFile(config_path, config);
+            getLogger().info("Normalized ECleaner TOML config during reload.");
         }
         auto_item_clean = config.value("auto_item_clean", true);
         auto_entity_clean = config.value("auto_entity_clean", true);
@@ -929,7 +912,7 @@ void ECleaner::ecl_main_menu(endstone::Player &player)
             config.erase("clean_tps");
             config.erase("item_clean_list");
 
-            write_json_file(config_path, config);
+            ecleaner::config::writeTomlFile(config_path, config);
             schedule_cleanup_tasks();
 
             p->sendMessage(Tran.getLocal("Config file update over"));
