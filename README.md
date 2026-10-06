@@ -112,10 +112,16 @@ plugins/ecleaner/language/
     "chunk_entity_guard": {
         "enabled": true,
         "reconcile_interval_ticks": 20,
-        "type_limits": {
-            "minecraft:slime": 48,
-            "minecraft:silverfish": 64,
-            "minecraft:magma_cube": 48
+        "pressure_mspt_threshold": 50.0,
+        "pressure_type_limits": {
+            "minecraft:slime": 96,
+            "minecraft:silverfish": 128,
+            "minecraft:magma_cube": 96
+        },
+        "hard_type_limits": {
+            "minecraft:slime": 256,
+            "minecraft:silverfish": 256,
+            "minecraft:magma_cube": 256
         },
         "cleanable_types": [
             "minecraft:zombie",
@@ -136,9 +142,12 @@ plugins/ecleaner/language/
             "minecraft:zombified_piglin",
             "minecraft:phantom"
         ],
-        "cleanable_mob_limit_per_chunk": 96,
-        "total_mob_limit_per_chunk": 160,
-        "cleanable_mob_limit_3x3": 256,
+        "pressure_cleanable_mob_limit_per_chunk": 192,
+        "hard_cleanable_mob_limit_per_chunk": 384,
+        "pressure_total_mob_limit_per_chunk": 320,
+        "hard_total_mob_limit_per_chunk": 512,
+        "pressure_cleanable_mob_limit_3x3": 512,
+        "hard_cleanable_mob_limit_3x3": 768,
         "emergency_delete_protected_mobs": false,
         "log_triggers": true,
         "log_cooldown_seconds": 10
@@ -180,15 +189,19 @@ plugins/ecleaner/language/
 
 ### Chunk Entity Guard
 
-The guard is independent from the Spark/PAPI MSPT gate. `reconcile_interval_ticks` defaults to 20 ticks, while ActorSpawnEvent/ActorRemoveEvent maintain a fast-path counter and threshold crossings request a next-tick reconciliation.
+The guard has two tiers. It reads the same Spark MSPT statistic selected by the root `mspt_window` / `mspt_statistic` settings, but uses its own configurable `pressure_mspt_threshold` (default `50.0` ms).
 
-`type_limits` defaults to 48 slimes, 64 silverfish, and 48 magma cubes per chunk. Hitting a type limit clears the unprotected mobs of that type in the chunk rather than trimming to the threshold.
+Pressure limits are enforced only while MSPT is at or above that threshold. The observation defaults are deliberately permissive: 96 slimes, 128 silverfish, or 96 magma cubes per chunk; 192 cleanable mobs per chunk; 320 total mobs per chunk; and 512 cleanable mobs in a 3x3 area.
 
-`cleanable_mob_limit_per_chunk` defaults to 96, `total_mob_limit_per_chunk` to 160, and `cleanable_mob_limit_3x3` to 256. The 3x3 fuse prevents distributing one reactor across chunk borders.
+Hard limits do not depend on Spark/PAPI and remain active even when MSPT is healthy or unavailable: 256 for each configured high-risk type, 384 cleanable mobs per chunk, 512 total mobs per chunk, and 768 cleanable mobs per 3x3 area. This keeps healthy technical farms unrestricted below the hard safety envelope while retaining a last-resort fuse.
 
-`emergency_delete_protected_mobs` defaults to `false`. When false, even the 160-Mob emergency fuse preserves protected mobs; setting it to `true` explicitly allows the emergency fuse to remove them. Players are never removed.
+`reconcile_interval_ticks` defaults to 20 ticks. ActorSpawnEvent/ActorRemoveEvent maintain a fast-path counter; hard-limit crossings, and pressure-limit crossings while pressure is active, request a next-tick reconciliation. MSPT is sampled once per reconciliation rather than once per spawn.
 
-`log_triggers` and `log_cooldown_seconds` only rate-limit repeated logs; they never pause enforcement.
+If Spark/PAPI data is unavailable, pressure-tier cleanup fails closed and does not delete entities, but hard limits continue to protect the server. Set `pressure_mspt_threshold` to `0` to make the pressure tier unconditional.
+
+`emergency_delete_protected_mobs` defaults to `false`. Protected mobs are counted toward density but are preserved by default; setting this option to `true` allows chunk-total pressure/hard fuses to remove them. Players are never removed.
+
+Trigger logs identify whether the event was `pressure` or `hard` and include the sampled MSPT when available. `log_triggers` and `log_cooldown_seconds` only rate-limit repeated logs; they never pause enforcement.
 
 Scheduled cleanup depends on `papi` and `spark`. If either is missing, PAPI is inactive, the Spark expansion is not registered, the placeholder has no usable samples yet, or the returned value cannot be parsed, scheduled cleanup is skipped. Manual operator commands (`/ecl clean`, `/ecl clean item`, `/ecl clean entity`) bypass the MSPT gate.
 
@@ -234,4 +247,4 @@ Reload configuration and safely cancel/recreate both scheduled tasks.
 - A customized legacy `clean_time` is converted from minutes to seconds and applied to both new schedules; `clean_time = 0` remains disabled.
 - Customized blacklist/whitelist modes and list contents are preserved where possible. Legacy `item_clean_list` entries are migrated to stable ItemType IDs; unknown custom English names are retained in `item_clean_legacy_names` as a compatibility fallback.
 
-Upgrading a 0.2.x config to 0.3.0 automatically adds `entity_protection` and `chunk_entity_guard` while preserving existing cleanup lists and MSPT settings. If the old config is no longer useful, remove `plugins/ecleaner/config.json` and restart to regenerate the current defaults.
+Upgrading a 0.3.0 config migrates the old chunk limits into the new pressure-limit fields without changing custom values, then adds the new hard-limit safety tier. Removing `plugins/ecleaner/config.json` and restarting regenerates the new 0.3.1 observation defaults.
