@@ -4,6 +4,7 @@
 //
 
 #include "ecleaner.h"
+#include "config_io.h"
 #include "version.h"
 
 #include <endstone_papi/placeholder_api.h>
@@ -13,19 +14,17 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 translate Tran;
 
 const std::string data_path = "plugins/ecleaner";
-const std::string config_path = "plugins/ecleaner/config.json";
+const std::string config_path = "plugins/ecleaner/config.toml";
 
 std::shared_ptr<endstone::Task> item_clean_task;
 std::shared_ptr<endstone::Task> entity_clean_task;
@@ -85,72 +84,6 @@ const std::vector<std::string> kDefaultEntityCleanList = {
     "minecraft:phantom",
 };
 
-const std::vector<std::string> kLegacyDefaultItemCleanList = {
-    "Shulker Box",
-    "White Shulker Box",
-    "Light Gray Shulker Box",
-    "Gray Shulker Box",
-    "Black Shulker Box",
-    "Brown Shulker Box",
-    "Red Shulker Box",
-    "Orange Shulker Box",
-    "Yellow Shulker Box",
-    "Lime Shulker Box",
-    "Green Shulker Box",
-    "Cyan Shulker Box",
-    "Light Blue Shulker Box",
-    "Blue Shulker Box",
-    "Purple Shulker Box",
-    "Magenta Shulker Box",
-    "Pink Shulker Box",
-};
-
-const std::vector<std::string> kLegacyDefaultEntityCleanList = {
-    "minecraft:zombie_pigman",
-    "minecraft:zombie",
-    "minecraft:skeleton",
-    "minecraft:bogged",
-    "minecraft:slime",
-};
-
-const std::unordered_map<std::string, std::string> kLegacyItemNameToId = {
-    {"Netherrack", "minecraft:netherrack"},
-    {"Cobblestone", "minecraft:cobblestone"},
-    {"Cobbled Deepslate", "minecraft:cobbled_deepslate"},
-    {"Stone", "minecraft:stone"},
-    {"Deepslate", "minecraft:deepslate"},
-    {"Dirt", "minecraft:dirt"},
-    {"Grass Block", "minecraft:grass_block"},
-    {"Gravel", "minecraft:gravel"},
-    {"Tuff", "minecraft:tuff"},
-    {"Granite", "minecraft:granite"},
-    {"Diorite", "minecraft:diorite"},
-    {"Andesite", "minecraft:andesite"},
-    {"Calcite", "minecraft:calcite"},
-    {"Basalt", "minecraft:basalt"},
-    {"Blackstone", "minecraft:blackstone"},
-    {"End Stone", "minecraft:end_stone"},
-    {"Sandstone", "minecraft:sandstone"},
-    {"Red Sandstone", "minecraft:red_sandstone"},
-    {"Shulker Box", "minecraft:shulker_box"},
-    {"White Shulker Box", "minecraft:white_shulker_box"},
-    {"Light Gray Shulker Box", "minecraft:light_gray_shulker_box"},
-    {"Gray Shulker Box", "minecraft:gray_shulker_box"},
-    {"Black Shulker Box", "minecraft:black_shulker_box"},
-    {"Brown Shulker Box", "minecraft:brown_shulker_box"},
-    {"Red Shulker Box", "minecraft:red_shulker_box"},
-    {"Orange Shulker Box", "minecraft:orange_shulker_box"},
-    {"Yellow Shulker Box", "minecraft:yellow_shulker_box"},
-    {"Lime Shulker Box", "minecraft:lime_shulker_box"},
-    {"Green Shulker Box", "minecraft:green_shulker_box"},
-    {"Cyan Shulker Box", "minecraft:cyan_shulker_box"},
-    {"Light Blue Shulker Box", "minecraft:light_blue_shulker_box"},
-    {"Blue Shulker Box", "minecraft:blue_shulker_box"},
-    {"Purple Shulker Box", "minecraft:purple_shulker_box"},
-    {"Magenta Shulker Box", "minecraft:magenta_shulker_box"},
-    {"Pink Shulker Box", "minecraft:pink_shulker_box"},
-};
-
 std::unordered_set<std::string> item_clean_id_lookup;
 std::unordered_set<std::string> item_clean_legacy_name_lookup;
 std::unordered_set<std::string> entity_clean_lookup;
@@ -178,62 +111,6 @@ json make_default_config()
     };
 }
 
-std::optional<std::string> legacy_item_name_to_id(const std::string &value)
-{
-    if (value.rfind("minecraft:", 0) == 0) {
-        return value;
-    }
-
-    const auto it = kLegacyItemNameToId.find(value);
-    if (it == kLegacyItemNameToId.end()) {
-        return std::nullopt;
-    }
-    return it->second;
-}
-
-void migrate_legacy_item_list(json &config, bool &changed)
-{
-    if (!config.contains("item_clean_list")) {
-        return;
-    }
-
-    const auto legacy_names = config.value("item_clean_list", std::vector<std::string>{});
-    const bool legacy_default_mode = config.value("item_clean_whitelist", true);
-
-    if (!config.contains("item_clean_ids")) {
-        if (legacy_default_mode && legacy_names == kLegacyDefaultItemCleanList) {
-            // Upstream 0.1.x default: preserve shulker boxes and delete everything else.
-            // That policy is unsafe at a 10-second interval, so move untouched defaults
-            // to the new performance-first terrain-waste blacklist.
-            config["item_clean_whitelist"] = false;
-            config["item_clean_ids"] = kDefaultItemCleanIds;
-            config["item_clean_legacy_names"] = json::array();
-        }
-        else {
-            std::vector<std::string> migrated_ids;
-            std::vector<std::string> unknown_names;
-
-            migrated_ids.reserve(legacy_names.size());
-            unknown_names.reserve(legacy_names.size());
-
-            for (const auto &name : legacy_names) {
-                if (const auto id = legacy_item_name_to_id(name)) {
-                    migrated_ids.push_back(*id);
-                }
-                else {
-                    unknown_names.push_back(name);
-                }
-            }
-
-            config["item_clean_ids"] = migrated_ids;
-            config["item_clean_legacy_names"] = unknown_names;
-        }
-    }
-
-    config.erase("item_clean_list");
-    changed = true;
-}
-
 std::optional<std::size_t> mspt_statistic_index(std::string_view statistic);
 
 bool normalize_config(json &config)
@@ -241,58 +118,6 @@ bool normalize_config(json &config)
     const json defaults = make_default_config();
     bool changed = false;
 
-    const bool has_legacy_schedule =
-        config.contains("clean_time") || config.contains("clean_tps");
-
-    if (has_legacy_schedule) {
-        const int legacy_clean_time = std::clamp(config.value("clean_time", 15), 0, 60);
-
-        // A partially missing upstream 0.1.x item list must not inherit the new
-        // default IDs while retaining whitelist mode, which would invert the
-        // intended performance-first policy and delete almost everything else.
-        if (!config.contains("item_clean_list")
-            && !config.contains("item_clean_ids")
-            && config.value("item_clean_whitelist", true)) {
-            config["item_clean_whitelist"] = false;
-            config["item_clean_ids"] = kDefaultItemCleanIds;
-            config["item_clean_legacy_names"] = json::array();
-            changed = true;
-        }
-
-        // Preserve custom legacy schedules, but convert the untouched upstream
-        // 15-minute default into the new 10s/60s performance-first defaults.
-        if (!config.contains("item_clean_interval_seconds")) {
-            config["item_clean_interval_seconds"] =
-                legacy_clean_time == 15 ? 10 : legacy_clean_time * 60;
-            changed = true;
-        }
-        if (!config.contains("entity_clean_interval_seconds")) {
-            config["entity_clean_interval_seconds"] =
-                legacy_clean_time == 15 ? 60 : legacy_clean_time * 60;
-            changed = true;
-        }
-
-        const bool legacy_default_entity_mode =
-            !config.value("entity_clean_whitelist", false);
-        const bool legacy_entity_list_missing = !config.contains("entity_clean_list");
-        const auto legacy_entity_list =
-            config.value("entity_clean_list", std::vector<std::string>{});
-        if (legacy_default_entity_mode
-            && (legacy_entity_list_missing || legacy_entity_list == kLegacyDefaultEntityCleanList)) {
-            config["entity_clean_whitelist"] = false;
-            config["entity_clean_list"] = kDefaultEntityCleanList;
-            changed = true;
-        }
-
-        if (config.erase("clean_time") > 0) {
-            changed = true;
-        }
-        if (config.erase("clean_tps") > 0) {
-            changed = true;
-        }
-    }
-
-    migrate_legacy_item_list(config, changed);
     if (ChunkEntityGuard::normalizeRootConfig(config)) {
         changed = true;
     }
@@ -434,15 +259,6 @@ std::optional<std::size_t> mspt_statistic_index(std::string_view statistic)
     return std::nullopt;
 }
 
-void write_json_file(const std::string &path, const json &value)
-{
-    std::ofstream out(path);
-    if (!out.is_open()) {
-        throw std::runtime_error("failed to open config file for writing");
-    }
-    out << value.dump(4);
-}
-
 }  // namespace
 
 void ECleaner::datafile_check() const
@@ -454,7 +270,7 @@ void ECleaner::datafile_check() const
 
     if (!std::filesystem::exists(config_path)) {
         try {
-            write_json_file(config_path, defaults);
+            ecleaner::config::writeTomlFile(config_path, defaults);
             getLogger().info("Created default ECleaner config.");
         }
         catch (const std::exception &e) {
@@ -464,13 +280,11 @@ void ECleaner::datafile_check() const
     }
 
     try {
-        std::ifstream file(config_path);
-        json loaded_config;
-        file >> loaded_config;
+        json loaded_config = ecleaner::config::readTomlFile(config_path);
 
         if (normalize_config(loaded_config)) {
-            write_json_file(config_path, loaded_config);
-            getLogger().info("Migrated ECleaner config to the high-frequency cleanup schema.");
+            ecleaner::config::writeTomlFile(config_path, loaded_config);
+            getLogger().info("Normalized ECleaner TOML config.");
         }
     }
     catch (const std::exception &e) {
@@ -481,14 +295,7 @@ void ECleaner::datafile_check() const
 json ECleaner::read_config() const
 {
     try {
-        std::ifstream file(config_path);
-        if (!file.is_open()) {
-            throw std::runtime_error("config file could not be opened");
-        }
-
-        json value;
-        file >> value;
-        return value;
+        return ecleaner::config::readTomlFile(config_path);
     }
     catch (const std::exception &e) {
         getLogger().error(std::string("Failed to read ECleaner config: ") + e.what());
@@ -505,8 +312,8 @@ bool ECleaner::load_config()
 
     try {
         if (normalize_config(config)) {
-            write_json_file(config_path, config);
-            getLogger().info("Migrated ECleaner config during reload.");
+            ecleaner::config::writeTomlFile(config_path, config);
+            getLogger().info("Normalized ECleaner TOML config during reload.");
         }
         auto_item_clean = config.value("auto_item_clean", true);
         auto_entity_clean = config.value("auto_entity_clean", true);
@@ -925,11 +732,7 @@ void ECleaner::ecl_main_menu(endstone::Player &player)
             config["item_clean_interval_seconds"] = item_clean_interval_seconds;
             config["entity_clean_interval_seconds"] = entity_clean_interval_seconds;
             config["broadcast_cleanup_results"] = broadcast_cleanup_results;
-            config.erase("clean_time");
-            config.erase("clean_tps");
-            config.erase("item_clean_list");
-
-            write_json_file(config_path, config);
+            ecleaner::config::writeTomlFile(config_path, config);
             schedule_cleanup_tasks();
 
             p->sendMessage(Tran.getLocal("Config file update over"));

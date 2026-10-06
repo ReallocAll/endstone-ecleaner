@@ -35,6 +35,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+FetchContent_Declare(
+        tomlplusplus
+        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+        GIT_TAG v3.4.0
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(tomlplusplus)
+
 # fmt (header-only or static)
 FetchContent_Declare(
         fmt
@@ -43,7 +51,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(fmt)
 
-endstone_add_plugin(${PROJECT_NAME} src/ecleaner.cpp src/chunk_entity_guard.cpp src/falling_block_guard.cpp)
+endstone_add_plugin(${PROJECT_NAME} src/ecleaner.cpp src/config_io.cpp src/chunk_entity_guard.cpp src/falling_block_guard.cpp)
 
 target_include_directories(${PROJECT_NAME}
         PRIVATE
@@ -51,7 +59,15 @@ target_include_directories(${PROJECT_NAME}
         ${endstone_papi_headers_SOURCE_DIR}/include
         )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json fmt::fmt-header-only)
+target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus fmt::fmt-header-only)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(ecleaner_config_io_test tests/config_io_test.cpp src/config_io.cpp)
+    target_include_directories(ecleaner_config_io_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(ecleaner_config_io_test PRIVATE nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus)
+    add_test(NAME config_io_round_trip COMMAND ecleaner_config_io_test)
+endif()
 
 find_package(Git QUIET)
 if(GIT_FOUND)
@@ -95,7 +111,7 @@ else()
 endif()
 
 # 基础版本（主版本号）
-set(BASE_VERSION "0.3.2")
+set(BASE_VERSION "0.3.3")
 
 # 检查是否为正式发布版本
 if(RELEASE_VERSION)
