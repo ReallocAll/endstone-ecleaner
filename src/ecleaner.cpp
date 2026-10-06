@@ -703,7 +703,7 @@ void ECleaner::onLoad()
 
 void ECleaner::onEnable()
 {
-    chunk_entity_guard_ = std::make_unique<ChunkEntityGuard>(*this);
+    chunk_entity_guard_ = std::make_unique<ChunkEntityGuard>(*this, [this]() { return query_mspt(); });
 
     if (!load_config()) {
         getLogger().warning("ECleaner config could not be loaded; using in-memory defaults.");

@@ -52,6 +52,24 @@ const std::vector<std::string> kDefaultGuardCleanableTypes = {
     "minecraft:phantom",
 };
 
+json defaultPressureTypeLimits()
+{
+    return {
+        {"minecraft:slime", 96},
+        {"minecraft:silverfish", 128},
+        {"minecraft:magma_cube", 96},
+    };
+}
+
+json defaultHardTypeLimits()
+{
+    return {
+        {"minecraft:slime", 256},
+        {"minecraft:silverfish", 256},
+        {"minecraft:magma_cube", 256},
+    };
+}
+
 std::vector<std::string> sanitizeStringArray(const json &value)
 {
     std::vector<std::string> result;
@@ -94,6 +112,36 @@ int normalizedInteger(json &object, const char *key, int fallback, int minimum, 
     return value;
 }
 
+double normalizedDouble(
+    json &object,
+    const char *key,
+    double fallback,
+    double minimum,
+    double maximum,
+    bool &changed
+)
+{
+    double raw = fallback;
+    if (object.contains(key) && object[key].is_number()) {
+        raw = object[key].get<double>();
+    }
+    else {
+        changed = true;
+    }
+
+    if (!std::isfinite(raw)) {
+        raw = fallback;
+        changed = true;
+    }
+
+    const double value = std::clamp(raw, minimum, maximum);
+    if (!object.contains(key) || !object[key].is_number() || object[key].get<double>() != value) {
+        object[key] = value;
+        changed = true;
+    }
+    return value;
+}
+
 bool normalizedBoolean(json &object, const char *key, bool fallback, bool &changed)
 {
     if (!object.contains(key) || !object[key].is_boolean()) {
@@ -101,6 +149,37 @@ bool normalizedBoolean(json &object, const char *key, bool fallback, bool &chang
         changed = true;
     }
     return object[key].get<bool>();
+}
+
+void normalizeLimitMap(
+    json &guard,
+    const char *key,
+    const json &fallback,
+    bool &changed
+)
+{
+    if (!guard.contains(key) || !guard[key].is_object()) {
+        guard[key] = fallback;
+        changed = true;
+        return;
+    }
+
+    auto &limits = guard[key];
+    for (auto it = limits.begin(); it != limits.end();) {
+        if (!it.value().is_number_integer()) {
+            it = limits.erase(it);
+            changed = true;
+            continue;
+        }
+
+        const auto raw = it.value().get<std::int64_t>();
+        const auto clamped = std::clamp<std::int64_t>(raw, 0, 100000);
+        if (clamped != raw) {
+            it.value() = static_cast<int>(clamped);
+            changed = true;
+        }
+        ++it;
+    }
 }
 
 std::uint64_t steadyMillis()
@@ -114,7 +193,10 @@ std::uint64_t steadyMillis()
 
 }  // namespace
 
-ChunkEntityGuard::ChunkEntityGuard(endstone::Plugin &plugin) : plugin_(plugin) {}
+ChunkEntityGuard::ChunkEntityGuard(endstone::Plugin &plugin, MsptQuery mspt_query)
+    : plugin_(plugin), mspt_query_(std::move(mspt_query))
+{
+}
 
 nlohmann::json ChunkEntityGuard::defaultProtectionConfig()
 {
@@ -131,15 +213,16 @@ nlohmann::json ChunkEntityGuard::defaultGuardConfig()
     return {
         {"enabled", true},
         {"reconcile_interval_ticks", 20},
-        {"type_limits", {
-            {"minecraft:slime", 48},
-            {"minecraft:silverfish", 64},
-            {"minecraft:magma_cube", 48},
-        }},
+        {"pressure_mspt_threshold", 50.0},
+        {"pressure_type_limits", defaultPressureTypeLimits()},
+        {"hard_type_limits", defaultHardTypeLimits()},
         {"cleanable_types", kDefaultGuardCleanableTypes},
-        {"cleanable_mob_limit_per_chunk", 96},
-        {"total_mob_limit_per_chunk", 160},
-        {"cleanable_mob_limit_3x3", 256},
+        {"pressure_cleanable_mob_limit_per_chunk", 192},
+        {"hard_cleanable_mob_limit_per_chunk", 384},
+        {"pressure_total_mob_limit_per_chunk", 320},
+        {"hard_total_mob_limit_per_chunk", 512},
+        {"pressure_cleanable_mob_limit_3x3", 512},
+        {"hard_cleanable_mob_limit_3x3", 768},
         {"emergency_delete_protected_mobs", false},
         {"log_triggers", true},
         {"log_cooldown_seconds", 10},
@@ -181,11 +264,54 @@ bool ChunkEntityGuard::normalizeRootConfig(nlohmann::json &root)
     }
     auto &guard = root["chunk_entity_guard"];
 
+    // Migrate the 0.3.0 schema without changing existing custom values.
+    if (!guard.contains("pressure_type_limits") && guard.contains("type_limits")) {
+        guard["pressure_type_limits"] = guard["type_limits"];
+        guard.erase("type_limits");
+        changed = true;
+    }
+    if (!guard.contains("pressure_cleanable_mob_limit_per_chunk")
+        && guard.contains("cleanable_mob_limit_per_chunk")) {
+        guard["pressure_cleanable_mob_limit_per_chunk"] = guard["cleanable_mob_limit_per_chunk"];
+        guard.erase("cleanable_mob_limit_per_chunk");
+        changed = true;
+    }
+    if (!guard.contains("pressure_total_mob_limit_per_chunk")
+        && guard.contains("total_mob_limit_per_chunk")) {
+        guard["pressure_total_mob_limit_per_chunk"] = guard["total_mob_limit_per_chunk"];
+        guard.erase("total_mob_limit_per_chunk");
+        changed = true;
+    }
+    if (!guard.contains("pressure_cleanable_mob_limit_3x3")
+        && guard.contains("cleanable_mob_limit_3x3")) {
+        guard["pressure_cleanable_mob_limit_3x3"] = guard["cleanable_mob_limit_3x3"];
+        guard.erase("cleanable_mob_limit_3x3");
+        changed = true;
+    }
+
     normalizedBoolean(guard, "enabled", true, changed);
     normalizedInteger(guard, "reconcile_interval_ticks", 20, 1, 1200, changed);
-    normalizedInteger(guard, "cleanable_mob_limit_per_chunk", 96, 0, 100000, changed);
-    normalizedInteger(guard, "total_mob_limit_per_chunk", 160, 0, 100000, changed);
-    normalizedInteger(guard, "cleanable_mob_limit_3x3", 256, 0, 100000, changed);
+    normalizedDouble(guard, "pressure_mspt_threshold", 50.0, 0.0, 10000.0, changed);
+
+    normalizedInteger(
+        guard, "pressure_cleanable_mob_limit_per_chunk", 192, 0, 100000, changed
+    );
+    normalizedInteger(
+        guard, "hard_cleanable_mob_limit_per_chunk", 384, 0, 100000, changed
+    );
+    normalizedInteger(
+        guard, "pressure_total_mob_limit_per_chunk", 320, 0, 100000, changed
+    );
+    normalizedInteger(
+        guard, "hard_total_mob_limit_per_chunk", 512, 0, 100000, changed
+    );
+    normalizedInteger(
+        guard, "pressure_cleanable_mob_limit_3x3", 512, 0, 100000, changed
+    );
+    normalizedInteger(
+        guard, "hard_cleanable_mob_limit_3x3", 768, 0, 100000, changed
+    );
+
     normalizedBoolean(guard, "emergency_delete_protected_mobs", false, changed);
     normalizedBoolean(guard, "log_triggers", true, changed);
     normalizedInteger(guard, "log_cooldown_seconds", 10, 0, 3600, changed);
@@ -202,28 +328,8 @@ bool ChunkEntityGuard::normalizeRootConfig(nlohmann::json &root)
         }
     }
 
-    if (!guard.contains("type_limits") || !guard["type_limits"].is_object()) {
-        guard["type_limits"] = defaultGuardConfig()["type_limits"];
-        changed = true;
-    }
-    else {
-        auto &limits = guard["type_limits"];
-        for (auto it = limits.begin(); it != limits.end();) {
-            if (!it.value().is_number_integer()) {
-                it = limits.erase(it);
-                changed = true;
-                continue;
-            }
-
-            const auto raw = it.value().get<std::int64_t>();
-            const auto clamped = std::clamp<std::int64_t>(raw, 0, 100000);
-            if (clamped != raw) {
-                it.value() = static_cast<int>(clamped);
-                changed = true;
-            }
-            ++it;
-        }
-    }
+    normalizeLimitMap(guard, "pressure_type_limits", defaultPressureTypeLimits(), changed);
+    normalizeLimitMap(guard, "hard_type_limits", defaultHardTypeLimits(), changed);
 
     return changed;
 }
@@ -243,12 +349,22 @@ void ChunkEntityGuard::configure(const nlohmann::json &root)
     const auto &guard = root.at("chunk_entity_guard");
     enabled_ = guard.value("enabled", true);
     reconcile_interval_ticks_ = std::clamp(guard.value("reconcile_interval_ticks", 20), 1, 1200);
-    cleanable_mob_limit_per_chunk_ =
-        std::clamp(guard.value("cleanable_mob_limit_per_chunk", 96), 0, 100000);
-    total_mob_limit_per_chunk_ =
-        std::clamp(guard.value("total_mob_limit_per_chunk", 160), 0, 100000);
-    cleanable_mob_limit_3x3_ =
-        std::clamp(guard.value("cleanable_mob_limit_3x3", 256), 0, 100000);
+    pressure_mspt_threshold_ =
+        std::clamp(guard.value("pressure_mspt_threshold", 50.0), 0.0, 10000.0);
+
+    pressure_cleanable_mob_limit_per_chunk_ =
+        std::clamp(guard.value("pressure_cleanable_mob_limit_per_chunk", 192), 0, 100000);
+    hard_cleanable_mob_limit_per_chunk_ =
+        std::clamp(guard.value("hard_cleanable_mob_limit_per_chunk", 384), 0, 100000);
+    pressure_total_mob_limit_per_chunk_ =
+        std::clamp(guard.value("pressure_total_mob_limit_per_chunk", 320), 0, 100000);
+    hard_total_mob_limit_per_chunk_ =
+        std::clamp(guard.value("hard_total_mob_limit_per_chunk", 512), 0, 100000);
+    pressure_cleanable_mob_limit_3x3_ =
+        std::clamp(guard.value("pressure_cleanable_mob_limit_3x3", 512), 0, 100000);
+    hard_cleanable_mob_limit_3x3_ =
+        std::clamp(guard.value("hard_cleanable_mob_limit_3x3", 768), 0, 100000);
+
     emergency_delete_protected_mobs_ = guard.value("emergency_delete_protected_mobs", false);
     log_triggers_ = guard.value("log_triggers", true);
     log_cooldown_seconds_ = std::clamp(guard.value("log_cooldown_seconds", 10), 0, 3600);
@@ -258,18 +374,32 @@ void ChunkEntityGuard::configure(const nlohmann::json &root)
         cleanable_types_.insert(type);
     }
 
-    type_limits_.clear();
-    if (guard.contains("type_limits") && guard["type_limits"].is_object()) {
-        for (const auto &[type, raw] : guard["type_limits"].items()) {
+    pressure_type_limits_.clear();
+    if (guard.contains("pressure_type_limits") && guard["pressure_type_limits"].is_object()) {
+        for (const auto &[type, raw] : guard["pressure_type_limits"].items()) {
             if (raw.is_number_integer()) {
                 const int limit = std::clamp(raw.get<int>(), 0, 100000);
                 if (limit > 0) {
-                    type_limits_[type] = limit;
+                    pressure_type_limits_[type] = limit;
                 }
             }
         }
     }
 
+    hard_type_limits_.clear();
+    if (guard.contains("hard_type_limits") && guard["hard_type_limits"].is_object()) {
+        for (const auto &[type, raw] : guard["hard_type_limits"].items()) {
+            if (raw.is_number_integer()) {
+                const int limit = std::clamp(raw.get<int>(), 0, 100000);
+                if (limit > 0) {
+                    hard_type_limits_[type] = limit;
+                }
+            }
+        }
+    }
+
+    pressure_active_ = false;
+    last_mspt_.reset();
     chunk_counts_.clear();
     actor_states_.clear();
 }
@@ -297,10 +427,15 @@ void ChunkEntityGuard::start()
     if (enabled_) {
         plugin_.getLogger().info(
             "Chunk entity guard enabled: reconcile=" + std::to_string(reconcile_interval_ticks_)
-            + "t, type limits=" + std::to_string(type_limits_.size())
-            + ", chunk cleanable=" + std::to_string(cleanable_mob_limit_per_chunk_)
-            + ", chunk total=" + std::to_string(total_mob_limit_per_chunk_)
-            + ", 3x3 cleanable=" + std::to_string(cleanable_mob_limit_3x3_) + "."
+            + "t, pressure_mspt=" + std::to_string(pressure_mspt_threshold_)
+            + "ms, pressure_types=" + std::to_string(pressure_type_limits_.size())
+            + ", hard_types=" + std::to_string(hard_type_limits_.size())
+            + ", pressure/hard cleanable=" + std::to_string(pressure_cleanable_mob_limit_per_chunk_)
+            + "/" + std::to_string(hard_cleanable_mob_limit_per_chunk_)
+            + ", pressure/hard total=" + std::to_string(pressure_total_mob_limit_per_chunk_)
+            + "/" + std::to_string(hard_total_mob_limit_per_chunk_)
+            + ", pressure/hard 3x3=" + std::to_string(pressure_cleanable_mob_limit_3x3_)
+            + "/" + std::to_string(hard_cleanable_mob_limit_3x3_) + "."
         );
     }
     else {
@@ -320,6 +455,8 @@ void ChunkEntityGuard::reschedule()
         immediate_reconcile_pending_ = false;
     }
 
+    pressure_active_ = false;
+    last_mspt_.reset();
     chunk_counts_.clear();
     actor_states_.clear();
 
@@ -349,6 +486,8 @@ void ChunkEntityGuard::stop()
     started_ = false;
     enabled_ = false;
     immediate_reconcile_pending_ = false;
+    pressure_active_ = false;
+    last_mspt_.reset();
     chunk_counts_.clear();
     actor_states_.clear();
 }
@@ -432,6 +571,17 @@ int ChunkEntityGuard::areaCleanableCount(const ChunkKey &center) const
     return total;
 }
 
+int ChunkEntityGuard::typeCount(const ChunkCounter *counter, const std::string &type) const
+{
+    if (counter == nullptr) {
+        return 0;
+    }
+    if (const auto it = counter->type_counts.find(type); it != counter->type_counts.end()) {
+        return it->second;
+    }
+    return 0;
+}
+
 bool ChunkEntityGuard::wouldRejectSpawn(
     endstone::Actor &actor,
     const ChunkKey &key,
@@ -441,34 +591,49 @@ bool ChunkEntityGuard::wouldRejectSpawn(
 {
     const auto counter_it = chunk_counts_.find(key);
     const ChunkCounter *counter = counter_it == chunk_counts_.end() ? nullptr : &counter_it->second;
+    const int current_type = typeCount(counter, type);
+    const int current_area_cleanable = cleanable ? areaCleanableCount(key) : 0;
 
-    bool normal_limit_reached = false;
-    if (const auto limit_it = type_limits_.find(type); limit_it != type_limits_.end()) {
-        const int current = counter == nullptr ? 0
-                                               : (counter->type_counts.contains(type)
-                                                      ? counter->type_counts.at(type)
-                                                      : 0);
-        normal_limit_reached = current >= limit_it->second;
-    }
+    const bool hard_type_reached =
+        hard_type_limits_.contains(type) && current_type >= hard_type_limits_.at(type);
+    const bool hard_cleanable_reached =
+        cleanable && hard_cleanable_mob_limit_per_chunk_ > 0 && counter != nullptr
+        && counter->cleanable_mobs >= hard_cleanable_mob_limit_per_chunk_;
+    const bool hard_area_reached =
+        cleanable && hard_cleanable_mob_limit_3x3_ > 0
+        && current_area_cleanable >= hard_cleanable_mob_limit_3x3_;
+    const bool hard_total_reached =
+        hard_total_mob_limit_per_chunk_ > 0 && counter != nullptr
+        && counter->total_mobs >= hard_total_mob_limit_per_chunk_;
 
-    if (cleanable && cleanable_mob_limit_per_chunk_ > 0 && counter != nullptr
-        && counter->cleanable_mobs >= cleanable_mob_limit_per_chunk_) {
-        normal_limit_reached = true;
-    }
-
-    if (cleanable && cleanable_mob_limit_3x3_ > 0
-        && areaCleanableCount(key) >= cleanable_mob_limit_3x3_) {
-        normal_limit_reached = true;
-    }
-
-    const bool emergency_limit_reached =
-        total_mob_limit_per_chunk_ > 0 && counter != nullptr
-        && counter->total_mobs >= total_mob_limit_per_chunk_;
-
-    if (emergency_limit_reached) {
+    if (hard_total_reached) {
         return !isProtected(actor, true);
     }
-    return normal_limit_reached && !isProtected(actor, false);
+    if (hard_type_reached || hard_cleanable_reached || hard_area_reached) {
+        return !isProtected(actor, false);
+    }
+
+    if (!pressure_active_) {
+        return false;
+    }
+
+    const bool pressure_type_reached =
+        pressure_type_limits_.contains(type) && current_type >= pressure_type_limits_.at(type);
+    const bool pressure_cleanable_reached =
+        cleanable && pressure_cleanable_mob_limit_per_chunk_ > 0 && counter != nullptr
+        && counter->cleanable_mobs >= pressure_cleanable_mob_limit_per_chunk_;
+    const bool pressure_area_reached =
+        cleanable && pressure_cleanable_mob_limit_3x3_ > 0
+        && current_area_cleanable >= pressure_cleanable_mob_limit_3x3_;
+    const bool pressure_total_reached =
+        pressure_total_mob_limit_per_chunk_ > 0 && counter != nullptr
+        && counter->total_mobs >= pressure_total_mob_limit_per_chunk_;
+
+    if (pressure_total_reached) {
+        return !isProtected(actor, true);
+    }
+    return (pressure_type_reached || pressure_cleanable_reached || pressure_area_reached)
+           && !isProtected(actor, false);
 }
 
 void ChunkEntityGuard::addActorState(
@@ -548,20 +713,29 @@ void ChunkEntityGuard::onActorSpawn(endstone::ActorSpawnEvent &event)
     addActorState(actor, key, type, cleanable);
 
     const auto &counter = chunk_counts_.at(key);
-    bool tripped = false;
+    const int current_type = typeCount(&counter, type);
+    const int current_area_cleanable = cleanable ? areaCleanableCount(key) : 0;
 
-    if (const auto it = type_limits_.find(type); it != type_limits_.end()) {
-        const auto count_it = counter.type_counts.find(type);
-        tripped = count_it != counter.type_counts.end() && count_it->second >= it->second;
+    bool tripped =
+        (hard_type_limits_.contains(type) && current_type >= hard_type_limits_.at(type))
+        || (cleanable && hard_cleanable_mob_limit_per_chunk_ > 0
+            && counter.cleanable_mobs >= hard_cleanable_mob_limit_per_chunk_)
+        || (hard_total_mob_limit_per_chunk_ > 0
+            && counter.total_mobs >= hard_total_mob_limit_per_chunk_)
+        || (cleanable && hard_cleanable_mob_limit_3x3_ > 0
+            && current_area_cleanable >= hard_cleanable_mob_limit_3x3_);
+
+    if (pressure_active_) {
+        tripped = tripped
+                  || (pressure_type_limits_.contains(type)
+                      && current_type >= pressure_type_limits_.at(type))
+                  || (cleanable && pressure_cleanable_mob_limit_per_chunk_ > 0
+                      && counter.cleanable_mobs >= pressure_cleanable_mob_limit_per_chunk_)
+                  || (pressure_total_mob_limit_per_chunk_ > 0
+                      && counter.total_mobs >= pressure_total_mob_limit_per_chunk_)
+                  || (cleanable && pressure_cleanable_mob_limit_3x3_ > 0
+                      && current_area_cleanable >= pressure_cleanable_mob_limit_3x3_);
     }
-
-    tripped = tripped
-              || (cleanable && cleanable_mob_limit_per_chunk_ > 0
-                  && counter.cleanable_mobs >= cleanable_mob_limit_per_chunk_)
-              || (total_mob_limit_per_chunk_ > 0
-                  && counter.total_mobs >= total_mob_limit_per_chunk_)
-              || (cleanable && cleanable_mob_limit_3x3_ > 0
-                  && areaCleanableCount(key) >= cleanable_mob_limit_3x3_);
 
     if (tripped) {
         requestImmediateReconcile();
@@ -589,6 +763,25 @@ void ChunkEntityGuard::requestImmediateReconcile()
             reconcile();
         }
     });
+}
+
+void ChunkEntityGuard::refreshPressureState()
+{
+    last_mspt_.reset();
+
+    if (pressure_mspt_threshold_ <= 0.0) {
+        pressure_active_ = true;
+        return;
+    }
+
+    if (!mspt_query_) {
+        pressure_active_ = false;
+        return;
+    }
+
+    last_mspt_ = mspt_query_();
+    pressure_active_ =
+        last_mspt_.has_value() && *last_mspt_ >= pressure_mspt_threshold_;
 }
 
 void ChunkEntityGuard::rebuildSnapshot(std::vector<ActorRecord> &records)
@@ -656,34 +849,83 @@ std::vector<ChunkEntityGuard::Trigger> ChunkEntityGuard::findTriggers() const
     std::vector<Trigger> triggers;
 
     for (const auto &[key, counter] : chunk_counts_) {
-        if (total_mob_limit_per_chunk_ > 0 && counter.total_mobs >= total_mob_limit_per_chunk_) {
+        if (hard_total_mob_limit_per_chunk_ > 0
+            && counter.total_mobs >= hard_total_mob_limit_per_chunk_) {
             triggers.push_back({
                 TriggerKind::ChunkTotal,
+                TriggerTier::Hard,
                 key,
                 {},
                 counter.total_mobs,
-                total_mob_limit_per_chunk_,
+                hard_total_mob_limit_per_chunk_,
             });
             continue;
         }
 
-        if (cleanable_mob_limit_per_chunk_ > 0
-            && counter.cleanable_mobs >= cleanable_mob_limit_per_chunk_) {
+        if (hard_cleanable_mob_limit_per_chunk_ > 0
+            && counter.cleanable_mobs >= hard_cleanable_mob_limit_per_chunk_) {
             triggers.push_back({
                 TriggerKind::ChunkCleanable,
+                TriggerTier::Hard,
                 key,
                 {},
                 counter.cleanable_mobs,
-                cleanable_mob_limit_per_chunk_,
+                hard_cleanable_mob_limit_per_chunk_,
             });
             continue;
         }
 
-        for (const auto &[type, limit] : type_limits_) {
+        bool hard_type_triggered = false;
+        for (const auto &[type, limit] : hard_type_limits_) {
             const auto count_it = counter.type_counts.find(type);
             if (count_it != counter.type_counts.end() && count_it->second >= limit) {
                 triggers.push_back({
                     TriggerKind::TypeLimit,
+                    TriggerTier::Hard,
+                    key,
+                    type,
+                    count_it->second,
+                    limit,
+                });
+                hard_type_triggered = true;
+            }
+        }
+        if (hard_type_triggered || !pressure_active_) {
+            continue;
+        }
+
+        if (pressure_total_mob_limit_per_chunk_ > 0
+            && counter.total_mobs >= pressure_total_mob_limit_per_chunk_) {
+            triggers.push_back({
+                TriggerKind::ChunkTotal,
+                TriggerTier::Pressure,
+                key,
+                {},
+                counter.total_mobs,
+                pressure_total_mob_limit_per_chunk_,
+            });
+            continue;
+        }
+
+        if (pressure_cleanable_mob_limit_per_chunk_ > 0
+            && counter.cleanable_mobs >= pressure_cleanable_mob_limit_per_chunk_) {
+            triggers.push_back({
+                TriggerKind::ChunkCleanable,
+                TriggerTier::Pressure,
+                key,
+                {},
+                counter.cleanable_mobs,
+                pressure_cleanable_mob_limit_per_chunk_,
+            });
+            continue;
+        }
+
+        for (const auto &[type, limit] : pressure_type_limits_) {
+            const auto count_it = counter.type_counts.find(type);
+            if (count_it != counter.type_counts.end() && count_it->second >= limit) {
+                triggers.push_back({
+                    TriggerKind::TypeLimit,
+                    TriggerTier::Pressure,
                     key,
                     type,
                     count_it->second,
@@ -693,7 +935,7 @@ std::vector<ChunkEntityGuard::Trigger> ChunkEntityGuard::findTriggers() const
         }
     }
 
-    if (cleanable_mob_limit_3x3_ <= 0) {
+    if (pressure_cleanable_mob_limit_3x3_ <= 0 && hard_cleanable_mob_limit_3x3_ <= 0) {
         return triggers;
     }
 
@@ -713,13 +955,26 @@ std::vector<ChunkEntityGuard::Trigger> ChunkEntityGuard::findTriggers() const
     std::vector<Trigger> area_candidates;
     for (const auto &center : candidate_centers) {
         const int observed = areaCleanableCount(center);
-        if (observed >= cleanable_mob_limit_3x3_) {
+        if (hard_cleanable_mob_limit_3x3_ > 0
+            && observed >= hard_cleanable_mob_limit_3x3_) {
             area_candidates.push_back({
                 TriggerKind::AreaCleanable,
+                TriggerTier::Hard,
                 center,
                 {},
                 observed,
-                cleanable_mob_limit_3x3_,
+                hard_cleanable_mob_limit_3x3_,
+            });
+        }
+        else if (pressure_active_ && pressure_cleanable_mob_limit_3x3_ > 0
+                 && observed >= pressure_cleanable_mob_limit_3x3_) {
+            area_candidates.push_back({
+                TriggerKind::AreaCleanable,
+                TriggerTier::Pressure,
+                center,
+                {},
+                observed,
+                pressure_cleanable_mob_limit_3x3_,
             });
         }
     }
@@ -739,6 +994,7 @@ bool ChunkEntityGuard::shouldLog(const Trigger &trigger)
                       + std::to_string(trigger.center.x) + ":"
                       + std::to_string(trigger.center.z) + ":"
                       + std::to_string(static_cast<int>(trigger.kind)) + ":"
+                      + std::to_string(static_cast<int>(trigger.tier)) + ":"
                       + trigger.type;
 
     const std::uint64_t now = steadyMillis();
@@ -764,21 +1020,27 @@ void ChunkEntityGuard::logTrigger(
         return;
     }
 
+    const std::string tier =
+        trigger.tier == TriggerTier::Hard ? "hard" : "pressure";
+
     std::string reason;
     switch (trigger.kind) {
     case TriggerKind::TypeLimit:
-        reason = "type_limit type=" + trigger.type;
+        reason = "type_" + tier + "_limit type=" + trigger.type;
         break;
     case TriggerKind::ChunkCleanable:
-        reason = "chunk_cleanable_limit";
+        reason = "chunk_cleanable_" + tier + "_limit";
         break;
     case TriggerKind::ChunkTotal:
-        reason = "chunk_total_emergency";
+        reason = "chunk_total_" + tier + "_limit";
         break;
     case TriggerKind::AreaCleanable:
-        reason = "area_3x3_cleanable_limit";
+        reason = "area_3x3_cleanable_" + tier + "_limit";
         break;
     }
+
+    const std::string mspt =
+        last_mspt_.has_value() ? std::to_string(*last_mspt_) : std::string("unavailable");
 
     plugin_.getLogger().warning(
         "Chunk entity guard triggered: dimension=" + trigger.center.dimension->getName()
@@ -786,6 +1048,8 @@ void ChunkEntityGuard::logTrigger(
         + ") reason=" + reason
         + " observed=" + std::to_string(trigger.observed)
         + " limit=" + std::to_string(trigger.limit)
+        + " mspt=" + mspt
+        + " pressure_threshold=" + std::to_string(pressure_mspt_threshold_)
         + " candidates=" + std::to_string(candidates)
         + " removed=" + std::to_string(removed)
         + " protected=" + std::to_string(protected_count)
@@ -879,6 +1143,8 @@ void ChunkEntityGuard::reconcile()
     if (!enabled_) {
         return;
     }
+
+    refreshPressureState();
 
     std::vector<ActorRecord> records;
     rebuildSnapshot(records);
