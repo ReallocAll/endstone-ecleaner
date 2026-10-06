@@ -51,7 +51,7 @@ private:
                      double mspt, double attempted_rate, const char *reason);
     void clearThrottle(endstone::Dimension &dimension, DimensionState &state,
                        double mspt, double attempted_rate);
-    void logAdjustment(const endstone::Dimension &dimension, const DimensionState &state,
+    void logAdjustment(endstone::Dimension &dimension, const DimensionState &state,
                        double mspt, double attempted_rate, const char *reason) const;
 
     endstone::Plugin &plugin_;
