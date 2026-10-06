@@ -82,7 +82,13 @@ std::string formatNumber(double value)
 {
     std::ostringstream stream;
     stream << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
-    return stream.str();
+    std::string result = stream.str();
+    if (result.find('.') == std::string::npos
+        && result.find('e') == std::string::npos
+        && result.find('E') == std::string::npos) {
+        result += ".0";
+    }
+    return result;
 }
 
 std::string formatValue(const json &value)
