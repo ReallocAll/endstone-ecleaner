@@ -14,8 +14,9 @@ ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's
 - Automatic cleanup is skipped while the server has no online players.
 - Scheduled cleanup is gated by Spark MSPT pressure: by default it only runs when the 10-second p95 MSPT is at least 50 ms.
 - MSPT is read from Spark through Endstone PAPI. If PAPI/Spark is unavailable or the MSPT value is unresolved, automatic cleanup fails closed and skips deletion.
-- 0.3.0 adds an MSPT-independent Chunk Entity Guard with per-type, per-chunk, and 3x3 density fuses for runaway mob reactors/farms.
+- 0.3.1 adds an MSPT-aware Chunk Entity Guard with pressure limits plus unconditional hard safety caps for runaway mob reactors/farms.
 - A shared high-value entity protection policy preserves villagers, pets, mounts, allays, shulkers, named mobs, and actors tagged `ecleaner_protect` by default. Protected mobs still count toward pressure.
+- 0.3.2 adds adaptive `falling_block` throttling for sand/gravity-block dupers: production is unlimited while MSPT is healthy, then backs off exponentially under pressure without dropping below a configured production floor.
 
 ## Installation
 
@@ -93,7 +94,7 @@ plugins/ecleaner/language/
             "minecraft:villager_v2",
             "minecraft:zombie_villager",
             "minecraft:zombie_villager_v2",
-            "minecraft:allay"
+            "minecraft:allay",
             "minecraft:horse",
             "minecraft:donkey",
             "minecraft:mule",
@@ -151,6 +152,19 @@ plugins/ecleaner/language/
         "emergency_delete_protected_mobs": false,
         "log_triggers": true,
         "log_cooldown_seconds": 10
+    },
+    "falling_block_guard": {
+        "enabled": true,
+        "control_interval_ticks": 20,
+        "pressure_mspt_threshold": 50.0,
+        "recovery_mspt_threshold": 45.0,
+        "backoff_factor": 0.5,
+        "recovery_factor": 2.0,
+        "recovery_stable_intervals": 5,
+        "min_rate_per_second": 16.0,
+        "activation_rate_per_second": 16.0,
+        "burst_capacity": 32.0,
+        "log_adjustments": true
     }
 }
 ```
@@ -203,6 +217,21 @@ If Spark/PAPI data is unavailable, pressure-tier cleanup fails closed and does n
 
 Trigger logs identify whether the event was `pressure` or `hard` and include the sampled MSPT when available. `log_triggers` and `log_cooldown_seconds` only rate-limit repeated logs; they never pause enforcement.
 
+### Falling Block Guard
+
+The falling-block guard is a feedback rate controller rather than a static entity-count limiter. It watches `minecraft:falling_block` spawn attempts per dimension and samples the configured Spark MSPT statistic once per control interval.
+
+While MSPT is below `pressure_mspt_threshold` (default 50 ms), falling-block production is unrestricted. When MSPT reaches the pressure threshold and a dimension is producing at least `activation_rate_per_second` (default 16/s), the allowed spawn rate is multiplied by `backoff_factor` (default 0.5) each control interval until MSPT recovers or the configured production floor is reached.
+
+The default floor is `min_rate_per_second = 16`, equivalent to 57,600 falling blocks/hour. This preserves a useful baseline output instead of shutting gravity-block farms down completely. A token bucket with `burst_capacity = 32` smooths short bursts.
+
+Recovery is slower than backoff. MSPT must remain at or below `recovery_mspt_threshold` (default 45 ms) for `recovery_stable_intervals = 5` control intervals before the allowed rate is multiplied by `recovery_factor = 2`. Once the next recovery step can satisfy observed unconstrained demand, throttling is removed entirely.
+
+The controller is per dimension, so a runaway End sand duper does not spend the Overworld's allowance. Spawn attempts are counted before rejection, allowing the controller to estimate unconstrained demand while throttled. PAPI/Spark is never queried from the spawn callback; it is queried once per control interval. If MSPT becomes temporarily unavailable, no new throttle is introduced and an existing throttle holds its current rate until feedback returns.
+
+The adaptive path does not delete already-existing falling-block entities. It only rejects excess new spawns while throttled.
+
+
 Scheduled cleanup depends on `papi` and `spark`. If either is missing, PAPI is inactive, the Spark expansion is not registered, the placeholder has no usable samples yet, or the returned value cannot be parsed, scheduled cleanup is skipped. Manual operator commands (`/ecl clean`, `/ecl clean item`, `/ecl clean entity`) bypass the MSPT gate.
 
 ## Commands
@@ -247,4 +276,4 @@ Reload configuration and safely cancel/recreate both scheduled tasks.
 - A customized legacy `clean_time` is converted from minutes to seconds and applied to both new schedules; `clean_time = 0` remains disabled.
 - Customized blacklist/whitelist modes and list contents are preserved where possible. Legacy `item_clean_list` entries are migrated to stable ItemType IDs; unknown custom English names are retained in `item_clean_legacy_names` as a compatibility fallback.
 
-Upgrading a 0.3.0 config migrates the old chunk limits into the new pressure-limit fields without changing custom values, then adds the new hard-limit safety tier. Removing `plugins/ecleaner/config.json` and restarting regenerates the new 0.3.1 observation defaults.
+Upgrading a 0.3.0 config migrates the old chunk limits into the new pressure-limit fields without changing custom values, then adds the new hard-limit safety tier. Removing `plugins/ecleaner/config.json` and restarting regenerates the current 0.3.2 defaults, including the adaptive falling-block guard.

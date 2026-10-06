@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "chunk_entity_guard.h"
+#include "falling_block_guard.h"
 #include "translate.hpp"
 
 using json = nlohmann::json;
@@ -71,4 +72,5 @@ public:
 
 private:
     std::unique_ptr<ChunkEntityGuard> chunk_entity_guard_;
+    std::unique_ptr<FallingBlockGuard> falling_block_guard_;
 };

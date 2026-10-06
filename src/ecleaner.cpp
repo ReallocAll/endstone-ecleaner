@@ -174,6 +174,7 @@ json make_default_config()
         {"entity_clean_list", kDefaultEntityCleanList},
         {"entity_protection", ChunkEntityGuard::defaultProtectionConfig()},
         {"chunk_entity_guard", ChunkEntityGuard::defaultGuardConfig()},
+        {"falling_block_guard", FallingBlockGuard::defaultConfig()},
     };
 }
 
@@ -293,6 +294,9 @@ bool normalize_config(json &config)
 
     migrate_legacy_item_list(config, changed);
     if (ChunkEntityGuard::normalizeRootConfig(config)) {
+        changed = true;
+    }
+    if (FallingBlockGuard::normalizeRootConfig(config)) {
         changed = true;
     }
 
@@ -528,6 +532,9 @@ bool ECleaner::load_config()
         if (chunk_entity_guard_) {
             chunk_entity_guard_->configure(config);
         }
+        if (falling_block_guard_) {
+            falling_block_guard_->configure(config);
+        }
 
         const std::string language = config.value("language", std::string("zh_CN"));
         language_file = language_path + language + ".json";
@@ -704,6 +711,7 @@ void ECleaner::onLoad()
 void ECleaner::onEnable()
 {
     chunk_entity_guard_ = std::make_unique<ChunkEntityGuard>(*this, [this]() { return query_mspt(); });
+    falling_block_guard_ = std::make_unique<FallingBlockGuard>(*this, [this]() { return query_mspt(); });
 
     if (!load_config()) {
         getLogger().warning("ECleaner config could not be loaded; using in-memory defaults.");
@@ -714,11 +722,14 @@ void ECleaner::onEnable()
 
         json defaults = make_default_config();
         ChunkEntityGuard::normalizeRootConfig(defaults);
+        FallingBlockGuard::normalizeRootConfig(defaults);
         chunk_entity_guard_->configure(defaults);
+        falling_block_guard_->configure(defaults);
     }
 
     schedule_cleanup_tasks();
     chunk_entity_guard_->start();
+    falling_block_guard_->start();
 
     auto papi_api = getServer().getServiceManager().load<papi::PlaceholderAPI>(
         std::string(papi::PlaceholderAPI::ServiceName)
@@ -737,7 +748,7 @@ void ECleaner::onEnable()
         + "s, entity interval=" + std::to_string(entity_clean_interval_seconds)
         + "s, mspt guard=" + std::to_string(mspt_threshold)
         + "ms (" + mspt_window + " " + mspt_statistic + ")"
-        + ", chunk entity guard=loaded."
+        + ", chunk entity guard=loaded, falling block guard=loaded."
     );
 }
 
@@ -745,6 +756,9 @@ void ECleaner::onDisable()
 {
     if (chunk_entity_guard_) {
         chunk_entity_guard_->stop();
+    }
+    if (falling_block_guard_) {
+        falling_block_guard_->stop();
     }
 
     if (item_clean_task) {
@@ -786,6 +800,9 @@ bool ECleaner::onCommand(
         schedule_cleanup_tasks();
         if (chunk_entity_guard_) {
             chunk_entity_guard_->reschedule();
+        }
+        if (falling_block_guard_) {
+            falling_block_guard_->reschedule();
         }
         sender.sendMessage(Tran.getLocal("Reload completed."));
         return true;
