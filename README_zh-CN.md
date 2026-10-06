@@ -15,7 +15,7 @@ ECleaner 是一个面向 Endstone 的轻量实体清理插件。本分支从 0.2
 - 自动清理由 Spark MSPT 压力阈值控制：默认仅当最近 10 秒的 p95 MSPT ≥ 50 ms 时才执行，避免服务器健康时无意义地删除掉落物或刷怪塔产物。
 - 通过 Endstone PAPI 读取 Spark 占位符；PAPI/Spark 未就绪或 MSPT 数据不可用时自动清理会 fail-closed（跳过清理）。
 - 0.3.1 将 Chunk Entity Guard 改为“MSPT 压力阈值 + 无条件硬上限”两级保护：服务器健康时不受普通压力阈值限制，只有达到更高硬上限才强制熔断。
-- 高价值生物使用统一保护策略：默认保护村民、宠物、坐骑、悦灵、潜影贝等，也保护命名实体和带 `ecleaner_protect` scoreboard tag 的实体。受保护实体仍计入压力，但默认不会被自动删除。
+- 高价值生物使用统一保护策略：默认保护村民、宠物、坐骑、悦灵、潜影贝等，也保护命名实体和带 `ecleaner_protect` scoreboard tag 的实体。受保护实体仍计入压力，但默认不会被自动删除。\n- 0.3.2 新增 `falling_block` 自适应限产：MSPT 健康时完全不限速，达到压力阈值后按指数退避降低刷沙机/重力方块机器产率，但不会低于配置的最低产量。
 
 ## 安装
 
@@ -257,4 +257,4 @@ MSPT 低于 50 ms 时，上述压力限制**不介入**。但无条件硬上限�
 - 如果旧的 `clean_time` 被手动修改过，则会按原分钟数换算成秒并同时用于两个新定时器；`clean_time = 0` 会继续保持关闭。
 - 自定义过的黑/白名单与名单内容会尽量保留。旧 `item_clean_list` 会自动转换为稳定 ItemType ID；无法识别的自定义英文名会保存在 `item_clean_legacy_names` 中继续兼容。
 
-0.3.0 配置升级时会把旧的 Chunk Entity Guard 数量阈值迁移到新的 pressure 字段，保留自定义值，并补充 hard safety tier。删除 `plugins/ecleaner/config.json` 后重启则会直接生成新的 0.3.1 观察阶段默认配置。
+0.3.0 配置升级时会把旧的 Chunk Entity Guard 数量阈值迁移到新的 pressure 字段，保留自定义值，并补充 hard safety tier。删除 `plugins/ecleaner/config.json` 后重启则会直接生成当前 0.3.2 默认配置，并包含新的 Falling Block Guard。
