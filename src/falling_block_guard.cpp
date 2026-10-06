@@ -355,7 +355,7 @@ void FallingBlockGuard::clearThrottle(
 }
 
 void FallingBlockGuard::logAdjustment(
-    const endstone::Dimension &dimension,
+    endstone::Dimension &dimension,
     const DimensionState &state,
     double mspt,
     double attempted_rate,
