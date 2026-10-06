@@ -108,17 +108,12 @@ std::string formatValue(const json &value)
         }
 
         std::ostringstream stream;
-        stream << "[";
-        bool first = true;
+        stream << "[\n";
         for (const auto &entry : value) {
             if (entry.is_object() || entry.is_array()) {
                 throw std::runtime_error("nested TOML arrays are not supported in ECleaner config");
             }
-            if (!first) {
-                stream << ", ";
-            }
-            first = false;
-            stream << formatValue(entry);
+            stream << "    " << formatValue(entry) << ",\n";
         }
         stream << "]";
         return stream.str();
