@@ -14,7 +14,7 @@ ECleaner 是一个面向 Endstone 的轻量实体清理插件。本分支从 0.2
 - 服务器无人在线时跳过自动清理。
 - 自动清理由 Spark MSPT 压力阈值控制：默认仅当最近 10 秒的 p95 MSPT ≥ 50 ms 时才执行，避免服务器健康时无意义地删除掉落物或刷怪塔产物。
 - 通过 Endstone PAPI 读取 Spark 占位符；PAPI/Spark 未就绪或 MSPT 数据不可用时自动清理会 fail-closed（跳过清理）。
-- 0.3.0 新增独立于 MSPT 的 Chunk Entity Guard：对史莱姆/蠹虫/岩浆怪等高风险实体设置单区块硬上限，并提供单区块与 3×3 区域熔断，防止实体反应堆或失控刷怪塔把服务器拖死。
+- 0.3.1 将 Chunk Entity Guard 改为“MSPT 压力阈值 + 无条件硬上限”两级保护：服务器健康时不受普通压力阈值限制，只有达到更高硬上限才强制熔断。
 - 高价值生物使用统一保护策略：默认保护村民、宠物、坐骑、悦灵、潜影贝等，也保护命名实体和带 `ecleaner_protect` scoreboard tag 的实体。受保护实体仍计入压力，但默认不会被自动删除。
 
 ## 安装
@@ -93,7 +93,7 @@ plugins/ecleaner/language/
             "minecraft:villager_v2",
             "minecraft:zombie_villager",
             "minecraft:zombie_villager_v2",
-            "minecraft:allay"
+            "minecraft:allay",
             "minecraft:horse",
             "minecraft:donkey",
             "minecraft:mule",
@@ -112,10 +112,16 @@ plugins/ecleaner/language/
     "chunk_entity_guard": {
         "enabled": true,
         "reconcile_interval_ticks": 20,
-        "type_limits": {
-            "minecraft:slime": 48,
-            "minecraft:silverfish": 64,
-            "minecraft:magma_cube": 48
+        "pressure_mspt_threshold": 50.0,
+        "pressure_type_limits": {
+            "minecraft:slime": 96,
+            "minecraft:silverfish": 128,
+            "minecraft:magma_cube": 96
+        },
+        "hard_type_limits": {
+            "minecraft:slime": 256,
+            "minecraft:silverfish": 256,
+            "minecraft:magma_cube": 256
         },
         "cleanable_types": [
             "minecraft:zombie",
@@ -136,9 +142,12 @@ plugins/ecleaner/language/
             "minecraft:zombified_piglin",
             "minecraft:phantom"
         ],
-        "cleanable_mob_limit_per_chunk": 96,
-        "total_mob_limit_per_chunk": 160,
-        "cleanable_mob_limit_3x3": 256,
+        "pressure_cleanable_mob_limit_per_chunk": 192,
+        "hard_cleanable_mob_limit_per_chunk": 384,
+        "pressure_total_mob_limit_per_chunk": 320,
+        "hard_total_mob_limit_per_chunk": 512,
+        "pressure_cleanable_mob_limit_3x3": 512,
+        "hard_cleanable_mob_limit_3x3": 768,
         "emergency_delete_protected_mobs": false,
         "log_triggers": true,
         "log_cooldown_seconds": 10
@@ -188,23 +197,21 @@ plugins/ecleaner/language/
 
 ### Chunk Entity Guard
 
-Chunk Entity Guard 与 MSPT 门控完全独立；即使 PAPI/Spark 不可用或 MSPT 尚未达到 50 ms，只要局部实体密度达到硬阈值就会介入。
+Chunk Entity Guard 现在分为两级：**性能压力阈值**和**无条件硬上限**。它读取根配置中的 `mspt_window` / `mspt_statistic` 所选 Spark 指标，但拥有独立的 `chunk_entity_guard.pressure_mspt_threshold`，默认 `50.0 ms`。
 
-`chunk_entity_guard.reconcile_interval_ticks`：权威全量校准周期，默认 20 tick。ActorSpawnEvent/ActorRemoveEvent 同时维护快速计数；达到阈值后会请求下一 tick 立即校准和清理。
+只有 MSPT 达到该阈值时才启用压力级限制。观察阶段默认放宽为：史莱姆 96/区块、蠹虫 128/区块、岩浆怪 96/区块；cleanable Mob 192/区块；全部 Mob 320/区块；cleanable Mob 512/3×3。
 
-`chunk_entity_guard.type_limits`：按实体类型设置单区块硬上限。默认史莱姆 48、蠹虫 64、岩浆怪 48。达到上限后清空该区块中对应的**未保护**实体，而不是只裁剪到阈值以下。
+MSPT 低于 50 ms 时，上述压力限制**不介入**。但无条件硬上限始终有效：上述三个高风险类型均为 256/区块，cleanable Mob 384/区块，全部 Mob 512/区块，cleanable Mob 768/3×3。这样正常高产机器不会因为普通数量阈值被削产，同时失控机器仍有最终保险。
 
-`chunk_entity_guard.cleanable_types`：允许普通区块/3×3 密度熔断清理的实体类型集合。
+`chunk_entity_guard.reconcile_interval_ticks`：权威全量校准周期，默认 20 tick。ActorSpawnEvent/ActorRemoveEvent 维护快速计数；硬上限达到时，或压力状态下达到压力阈值时，会请求下一 tick 立即校准。MSPT 每次 reconcile 只查询一次，不会在每个 spawn callback 中查询 PAPI。
 
-`chunk_entity_guard.cleanable_mob_limit_per_chunk`：单区块 cleanable Mob 上限，默认 96；触发后清空该区块所有未保护 cleanable Mob。
+如果 PAPI/Spark 数据暂时不可用，压力级限制 fail-closed，不执行删除；无条件硬上限仍然有效。将 `pressure_mspt_threshold` 设为 `0` 可让压力级限制恢复为无条件生效。
 
-`chunk_entity_guard.total_mob_limit_per_chunk`：单区块全部 Mob 的最终 emergency 阈值，默认 160。所有 Mob（包括受保护实体）都计数；默认只删除未保护 Mob。
+`chunk_entity_guard.cleanable_types`：允许区块/3×3 cleanable 密度限制清理的实体类型集合。
 
-`chunk_entity_guard.cleanable_mob_limit_3x3`：3×3 区块区域 cleanable Mob 上限，默认 256，用于防止机器跨区块规避单区块限制。
+`chunk_entity_guard.emergency_delete_protected_mobs`：默认 `false`。受保护实体仍计入密度，但默认不会被删除；显式设为 `true` 后，chunk-total 压力/硬熔断可以删除受保护 Mob。玩家永远不会被删除。
 
-`chunk_entity_guard.emergency_delete_protected_mobs`：默认 `false`。只有显式设为 `true` 时，160 Mob 的最终 emergency 熔断才允许删除高价值/命名/tag 保护实体；玩家永远不会被删除。
-
-`chunk_entity_guard.log_triggers` / `log_cooldown_seconds`：控制熔断日志与重复日志冷却。冷却只抑制日志，不会暂停保护或清理。
+熔断日志会区分 `pressure` / `hard`，并在可用时记录触发瞬间的 MSPT。`log_triggers` / `log_cooldown_seconds` 只控制日志频率，不影响实际保护。
 
 自动定时清理依赖 `papi` 与 `spark`。两者缺失、PAPI 服务未激活、Spark expansion 未注册、占位符尚无可用样本或返回值无法解析时，自动清理会直接跳过，不会在性能数据未知时删除实体。`/ecl clean`、`/ecl clean item`、`/ecl clean entity` 属于管理员手动操作，不受 MSPT 门控限制。
 
@@ -250,4 +257,4 @@ Chunk Entity Guard 与 MSPT 门控完全独立；即使 PAPI/Spark 不可用或 
 - 如果旧的 `clean_time` 被手动修改过，则会按原分钟数换算成秒并同时用于两个新定时器；`clean_time = 0` 会继续保持关闭。
 - 自定义过的黑/白名单与名单内容会尽量保留。旧 `item_clean_list` 会自动转换为稳定 ItemType ID；无法识别的自定义英文名会保存在 `item_clean_legacy_names` 中继续兼容。
 
-0.2.x 配置升级到 0.3.0 时会自动补充 `entity_protection` 与 `chunk_entity_guard`，已有清理名单和 MSPT 配置保持不变。如果配置已经比较混乱，删除旧的 `plugins/ecleaner/config.json` 后重启即可重新生成当前默认配置。
+0.3.0 配置升级时会把旧的 Chunk Entity Guard 数量阈值迁移到新的 pressure 字段，保留自定义值，并补充 hard safety tier。删除 `plugins/ecleaner/config.json` 后重启则会直接生成新的 0.3.1 观察阶段默认配置。
