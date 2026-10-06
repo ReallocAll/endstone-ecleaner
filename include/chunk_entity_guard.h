@@ -4,7 +4,9 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,7 +14,9 @@
 
 class ChunkEntityGuard {
 public:
-    explicit ChunkEntityGuard(endstone::Plugin &plugin);
+    using MsptQuery = std::function<std::optional<double>()>;
+
+    ChunkEntityGuard(endstone::Plugin &plugin, MsptQuery mspt_query);
 
     static nlohmann::json defaultProtectionConfig();
     static nlohmann::json defaultGuardConfig();
@@ -67,8 +71,14 @@ private:
         AreaCleanable,
     };
 
+    enum class TriggerTier {
+        Pressure,
+        Hard,
+    };
+
     struct Trigger {
         TriggerKind kind{};
+        TriggerTier tier{};
         ChunkKey center;
         std::string type;
         int observed{};
@@ -80,6 +90,7 @@ private:
     [[nodiscard]] bool isCleanableType(const std::string &type) const;
     [[nodiscard]] bool hasProtectionTag(const endstone::Actor &actor) const;
     [[nodiscard]] int areaCleanableCount(const ChunkKey &center) const;
+    [[nodiscard]] int typeCount(const ChunkCounter *counter, const std::string &type) const;
     [[nodiscard]] bool wouldRejectSpawn(endstone::Actor &actor, const ChunkKey &key,
                                         const std::string &type, bool cleanable) const;
 
@@ -89,6 +100,7 @@ private:
     void removeActorState(std::uint64_t runtime_id);
     void requestImmediateReconcile();
     void reconcile();
+    void refreshPressureState();
     void rebuildSnapshot(std::vector<ActorRecord> &records);
     [[nodiscard]] std::vector<Trigger> findTriggers() const;
     [[nodiscard]] std::vector<Trigger> selectAreaTriggers(std::vector<Trigger> candidates) const;
@@ -97,6 +109,7 @@ private:
     [[nodiscard]] bool shouldLog(const Trigger &trigger);
 
     endstone::Plugin &plugin_;
+    MsptQuery mspt_query_;
     std::shared_ptr<endstone::Task> reconcile_task_;
     std::shared_ptr<endstone::Task> immediate_task_;
     bool started_{false};
@@ -104,11 +117,21 @@ private:
 
     bool enabled_{true};
     int reconcile_interval_ticks_{20};
-    std::unordered_map<std::string, int> type_limits_;
+
+    double pressure_mspt_threshold_{50.0};
+    bool pressure_active_{false};
+    std::optional<double> last_mspt_;
+
+    std::unordered_map<std::string, int> pressure_type_limits_;
+    std::unordered_map<std::string, int> hard_type_limits_;
     std::unordered_set<std::string> cleanable_types_;
-    int cleanable_mob_limit_per_chunk_{96};
-    int total_mob_limit_per_chunk_{160};
-    int cleanable_mob_limit_3x3_{256};
+    int pressure_cleanable_mob_limit_per_chunk_{192};
+    int hard_cleanable_mob_limit_per_chunk_{384};
+    int pressure_total_mob_limit_per_chunk_{320};
+    int hard_total_mob_limit_per_chunk_{512};
+    int pressure_cleanable_mob_limit_3x3_{512};
+    int hard_cleanable_mob_limit_3x3_{768};
+
     bool emergency_delete_protected_mobs_{false};
     bool log_triggers_{true};
     int log_cooldown_seconds_{10};
