@@ -61,6 +61,14 @@ target_include_directories(${PROJECT_NAME}
 
 target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus fmt::fmt-header-only)
 
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(ecleaner_config_io_test tests/config_io_test.cpp src/config_io.cpp)
+    target_include_directories(ecleaner_config_io_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(ecleaner_config_io_test PRIVATE nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus)
+    add_test(NAME config_io_round_trip COMMAND ecleaner_config_io_test)
+endif()
+
 find_package(Git QUIET)
 if(GIT_FOUND)
     # 获取最近的 tag
