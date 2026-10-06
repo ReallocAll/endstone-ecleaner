@@ -16,14 +16,14 @@ ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's
 - MSPT is read from Spark through Endstone PAPI. If PAPI/Spark is unavailable or the MSPT value is unresolved, automatic cleanup fails closed and skips deletion.
 - 0.3.1 adds an MSPT-aware Chunk Entity Guard with pressure limits plus unconditional hard safety caps for runaway mob reactors/farms.
 - A shared high-value entity protection policy preserves villagers, pets, mounts, allays, shulkers, named mobs, and actors tagged `ecleaner_protect` by default. Protected mobs still count toward pressure.
-- 0.3.2 adds adaptive `falling_block` throttling for sand/gravity-block dupers: production is unlimited while MSPT is healthy, then backs off exponentially under pressure without dropping below a configured production floor.
+- 0.3.2 adds adaptive `falling_block` throttling for sand/gravity-block dupers: production is unlimited while MSPT is healthy, then backs off exponentially under pressure without dropping below a configured production floor.\n- 0.3.3 switches the main configuration to TOML. `config.json` is no longer read or migrated; a missing `config.toml` is generated directly from current defaults.
 
 ## Installation
 
 Place the plugin binary in the Endstone server's `plugins` directory. On first startup ECleaner creates:
 
 ```text
-plugins/ecleaner/config.json
+plugins/ecleaner/config.toml
 ```
 
 Language files live under:
@@ -34,139 +34,139 @@ plugins/ecleaner/language/
 
 ## Default configuration
 
-```json
-{
-    "language": "zh_CN",
-    "auto_item_clean": true,
-    "auto_entity_clean": true,
-    "item_clean_interval_seconds": 10,
-    "entity_clean_interval_seconds": 60,
-    "broadcast_cleanup_results": false,
-    "mspt_threshold": 50.0,
-    "mspt_window": "10s",
-    "mspt_statistic": "p95",
-    "item_clean_whitelist": false,
-    "item_clean_ids": [
-        "minecraft:netherrack",
-        "minecraft:cobblestone",
-        "minecraft:cobbled_deepslate",
-        "minecraft:stone",
-        "minecraft:deepslate",
-        "minecraft:dirt",
-        "minecraft:grass_block",
-        "minecraft:gravel",
-        "minecraft:tuff",
-        "minecraft:granite",
-        "minecraft:diorite",
-        "minecraft:andesite",
-        "minecraft:calcite",
-        "minecraft:basalt",
-        "minecraft:blackstone",
-        "minecraft:end_stone",
-        "minecraft:sandstone",
-        "minecraft:red_sandstone"
-    ],
-    "item_clean_legacy_names": [],
-    "entity_clean_whitelist": false,
-    "entity_clean_list": [
-        "minecraft:zombie",
-        "minecraft:skeleton",
-        "minecraft:creeper",
-        "minecraft:spider",
-        "minecraft:cave_spider",
-        "minecraft:husk",
-        "minecraft:drowned",
-        "minecraft:stray",
-        "minecraft:bogged",
-        "minecraft:witch",
-        "minecraft:slime",
-        "minecraft:magma_cube",
-        "minecraft:zombie_pigman",
-        "minecraft:zombified_piglin",
-        "minecraft:phantom"
-    ],
-    "entity_protection": {
-        "enabled": true,
-        "protect_named": true,
-        "protect_tag": "ecleaner_protect",
-        "types": [
-            "minecraft:villager",
-            "minecraft:villager_v2",
-            "minecraft:zombie_villager",
-            "minecraft:zombie_villager_v2",
-            "minecraft:allay",
-            "minecraft:horse",
-            "minecraft:donkey",
-            "minecraft:mule",
-            "minecraft:camel",
-            "minecraft:llama",
-            "minecraft:trader_llama",
-            "minecraft:wolf",
-            "minecraft:cat",
-            "minecraft:parrot",
-            "minecraft:sniffer",
-            "minecraft:iron_golem",
-            "minecraft:snow_golem",
-            "minecraft:shulker"
-        ]
-    },
-    "chunk_entity_guard": {
-        "enabled": true,
-        "reconcile_interval_ticks": 20,
-        "pressure_mspt_threshold": 50.0,
-        "pressure_type_limits": {
-            "minecraft:slime": 96,
-            "minecraft:silverfish": 128,
-            "minecraft:magma_cube": 96
-        },
-        "hard_type_limits": {
-            "minecraft:slime": 256,
-            "minecraft:silverfish": 256,
-            "minecraft:magma_cube": 256
-        },
-        "cleanable_types": [
-            "minecraft:zombie",
-            "minecraft:skeleton",
-            "minecraft:creeper",
-            "minecraft:spider",
-            "minecraft:cave_spider",
-            "minecraft:husk",
-            "minecraft:drowned",
-            "minecraft:stray",
-            "minecraft:bogged",
-            "minecraft:witch",
-            "minecraft:slime",
-            "minecraft:magma_cube",
-            "minecraft:silverfish",
-            "minecraft:endermite",
-            "minecraft:zombie_pigman",
-            "minecraft:zombified_piglin",
-            "minecraft:phantom"
-        ],
-        "pressure_cleanable_mob_limit_per_chunk": 192,
-        "hard_cleanable_mob_limit_per_chunk": 384,
-        "pressure_total_mob_limit_per_chunk": 320,
-        "hard_total_mob_limit_per_chunk": 512,
-        "pressure_cleanable_mob_limit_3x3": 512,
-        "hard_cleanable_mob_limit_3x3": 768,
-        "emergency_delete_protected_mobs": false,
-        "log_triggers": true,
-        "log_cooldown_seconds": 10
-    },
-    "falling_block_guard": {
-        "enabled": true,
-        "control_interval_ticks": 20,
-        "pressure_mspt_threshold": 50.0,
-        "recovery_mspt_threshold": 45.0,
-        "backoff_factor": 0.5,
-        "recovery_factor": 2.0,
-        "recovery_stable_intervals": 5,
-        "min_rate_per_second": 16.0,
-        "activation_rate_per_second": 16.0,
-        "burst_capacity": 32.0,
-        "log_adjustments": true
-    }
-}
+```toml
+language = "zh_CN"
+auto_item_clean = true
+auto_entity_clean = true
+item_clean_interval_seconds = 10
+entity_clean_interval_seconds = 60
+broadcast_cleanup_results = false
+mspt_threshold = 50.0
+mspt_window = "10s"
+mspt_statistic = "p95"
+
+item_clean_whitelist = false
+item_clean_ids = [
+    "minecraft:netherrack",
+    "minecraft:cobblestone",
+    "minecraft:cobbled_deepslate",
+    "minecraft:stone",
+    "minecraft:deepslate",
+    "minecraft:dirt",
+    "minecraft:grass_block",
+    "minecraft:gravel",
+    "minecraft:tuff",
+    "minecraft:granite",
+    "minecraft:diorite",
+    "minecraft:andesite",
+    "minecraft:calcite",
+    "minecraft:basalt",
+    "minecraft:blackstone",
+    "minecraft:end_stone",
+    "minecraft:sandstone",
+    "minecraft:red_sandstone",
+]
+item_clean_legacy_names = []
+
+entity_clean_whitelist = false
+entity_clean_list = [
+    "minecraft:zombie",
+    "minecraft:skeleton",
+    "minecraft:creeper",
+    "minecraft:spider",
+    "minecraft:cave_spider",
+    "minecraft:husk",
+    "minecraft:drowned",
+    "minecraft:stray",
+    "minecraft:bogged",
+    "minecraft:witch",
+    "minecraft:slime",
+    "minecraft:magma_cube",
+    "minecraft:zombie_pigman",
+    "minecraft:zombified_piglin",
+    "minecraft:phantom",
+]
+
+[entity_protection]
+enabled = true
+protect_named = true
+protect_tag = "ecleaner_protect"
+types = [
+    "minecraft:villager",
+    "minecraft:villager_v2",
+    "minecraft:zombie_villager",
+    "minecraft:zombie_villager_v2",
+    "minecraft:allay",
+    "minecraft:horse",
+    "minecraft:donkey",
+    "minecraft:mule",
+    "minecraft:camel",
+    "minecraft:llama",
+    "minecraft:trader_llama",
+    "minecraft:wolf",
+    "minecraft:cat",
+    "minecraft:parrot",
+    "minecraft:sniffer",
+    "minecraft:iron_golem",
+    "minecraft:snow_golem",
+    "minecraft:shulker",
+]
+
+[chunk_entity_guard]
+enabled = true
+reconcile_interval_ticks = 20
+pressure_mspt_threshold = 50.0
+cleanable_types = [
+    "minecraft:zombie",
+    "minecraft:skeleton",
+    "minecraft:creeper",
+    "minecraft:spider",
+    "minecraft:cave_spider",
+    "minecraft:husk",
+    "minecraft:drowned",
+    "minecraft:stray",
+    "minecraft:bogged",
+    "minecraft:witch",
+    "minecraft:slime",
+    "minecraft:magma_cube",
+    "minecraft:silverfish",
+    "minecraft:endermite",
+    "minecraft:zombie_pigman",
+    "minecraft:zombified_piglin",
+    "minecraft:phantom",
+]
+pressure_cleanable_mob_limit_per_chunk = 192
+hard_cleanable_mob_limit_per_chunk = 384
+pressure_total_mob_limit_per_chunk = 320
+hard_total_mob_limit_per_chunk = 512
+pressure_cleanable_mob_limit_3x3 = 512
+hard_cleanable_mob_limit_3x3 = 768
+emergency_delete_protected_mobs = false
+log_triggers = true
+log_cooldown_seconds = 10
+
+[chunk_entity_guard.pressure_type_limits]
+"minecraft:slime" = 96
+"minecraft:silverfish" = 128
+"minecraft:magma_cube" = 96
+
+[chunk_entity_guard.hard_type_limits]
+"minecraft:slime" = 256
+"minecraft:silverfish" = 256
+"minecraft:magma_cube" = 256
+
+[falling_block_guard]
+enabled = true
+control_interval_ticks = 20
+pressure_mspt_threshold = 50.0
+recovery_mspt_threshold = 45.0
+backoff_factor = 0.5
+recovery_factor = 2.0
+recovery_stable_intervals = 5
+min_rate_per_second = 16.0
+activation_rate_per_second = 16.0
+burst_capacity = 32.0
+log_adjustments = true
 ```
 
 ### Options
@@ -268,12 +268,9 @@ Immediately run entity cleanup.
 
 Reload configuration and safely cancel/recreate both scheduled tasks.
 
-## Upgrading from 0.1.x
+## Configuration format in 0.3.3
 
-0.2.0 removes the legacy `clean_time` and `clean_tps` keys and adds independent second-based intervals.
+ECleaner now uses only `plugins/ecleaner/config.toml` for its main configuration. Legacy `config.json` is ignored and is not migrated. Remove the old configuration before updating, or simply leave it unused; if `config.toml` does not exist, ECleaner generates a fresh TOML file with the current defaults.
 
-- An untouched 0.1.x default config is migrated to the new performance-first defaults: 10 seconds for items and 60 seconds for entities. The old shulker-box whitelist is also replaced with the low-value item blacklist so high-frequency cleanup does not delete almost every dropped item.
-- A customized legacy `clean_time` is converted from minutes to seconds and applied to both new schedules; `clean_time = 0` remains disabled.
-- Customized blacklist/whitelist modes and list contents are preserved where possible. Legacy `item_clean_list` entries are migrated to stable ItemType IDs; unknown custom English names are retained in `item_clean_legacy_names` as a compatibility fallback.
+Language files remain JSON under `plugins/ecleaner/language/`.
 
-Upgrading a 0.3.0 config migrates the old chunk limits into the new pressure-limit fields without changing custom values, then adds the new hard-limit safety tier. Removing `plugins/ecleaner/config.json` and restarting regenerates the current 0.3.2 defaults, including the adaptive falling-block guard.
