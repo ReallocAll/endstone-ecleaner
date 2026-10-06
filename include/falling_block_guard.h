@@ -69,7 +69,7 @@ private:
     int recovery_stable_intervals_{5};
 
     double min_rate_per_second_{16.0};
-    double activation_rate_per_second_{8.0};
+    double activation_rate_per_second_{16.0};
     double burst_capacity_{32.0};
 
     bool log_adjustments_{true};
