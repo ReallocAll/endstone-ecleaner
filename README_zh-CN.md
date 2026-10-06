@@ -15,7 +15,8 @@ ECleaner 是一个面向 Endstone 的轻量实体清理插件。本分支从 0.2
 - 自动清理由 Spark MSPT 压力阈值控制：默认仅当最近 10 秒的 p95 MSPT ≥ 50 ms 时才执行，避免服务器健康时无意义地删除掉落物或刷怪塔产物。
 - 通过 Endstone PAPI 读取 Spark 占位符；PAPI/Spark 未就绪或 MSPT 数据不可用时自动清理会 fail-closed（跳过清理）。
 - 0.3.1 将 Chunk Entity Guard 改为“MSPT 压力阈值 + 无条件硬上限”两级保护：服务器健康时不受普通压力阈值限制，只有达到更高硬上限才强制熔断。
-- 高价值生物使用统一保护策略：默认保护村民、宠物、坐骑、悦灵、潜影贝等，也保护命名实体和带 `ecleaner_protect` scoreboard tag 的实体。受保护实体仍计入压力，但默认不会被自动删除。\n- 0.3.2 新增 `falling_block` 自适应限产：MSPT 健康时完全不限速，达到压力阈值后按指数退避降低刷沙机/重力方块机器产率，但不会低于配置的最低产量。
+- 高价值生物使用统一保护策略：默认保护村民、宠物、坐骑、悦灵、潜影贝等，也保护命名实体和带 `ecleaner_protect` scoreboard tag 的实体。受保护实体仍计入压力，但默认不会被自动删除。
+- 0.3.2 新增 `falling_block` 自适应限产：MSPT 健康时完全不限速，达到压力阈值后按指数退避降低刷沙机/重力方块机器产率，但不会低于配置的最低产量。
 
 ## 安装
 
@@ -151,6 +152,19 @@ plugins/ecleaner/language/
         "emergency_delete_protected_mobs": false,
         "log_triggers": true,
         "log_cooldown_seconds": 10
+    },
+    "falling_block_guard": {
+        "enabled": true,
+        "control_interval_ticks": 20,
+        "pressure_mspt_threshold": 50.0,
+        "recovery_mspt_threshold": 45.0,
+        "backoff_factor": 0.5,
+        "recovery_factor": 2.0,
+        "recovery_stable_intervals": 5,
+        "min_rate_per_second": 16.0,
+        "activation_rate_per_second": 16.0,
+        "burst_capacity": 32.0,
+        "log_adjustments": true
     }
 }
 ```
@@ -212,6 +226,21 @@ MSPT 低于 50 ms 时，上述压力限制**不介入**。但无条件硬上限�
 `chunk_entity_guard.emergency_delete_protected_mobs`：默认 `false`。受保护实体仍计入密度，但默认不会被删除；显式设为 `true` 后，chunk-total 压力/硬熔断可以删除受保护 Mob。玩家永远不会被删除。
 
 熔断日志会区分 `pressure` / `hard`，并在可用时记录触发瞬间的 MSPT。`log_triggers` / `log_cooldown_seconds` 只控制日志频率，不影响实际保护。
+
+### Falling Block Guard
+
+Falling Block Guard 不是固定实体数量上限，而是一个基于 MSPT 的反馈限产控制器。它按维度统计 `minecraft:falling_block` 的生成尝试，并且每个控制周期只读取一次 Spark MSPT。
+
+当 MSPT 低于 `pressure_mspt_threshold`（默认 50 ms）时，刷沙机/重力方块机器**完全不限速**。当 MSPT 达到阈值，并且某维度的生成需求至少达到 `activation_rate_per_second`（默认 16/s）时，允许产率每个控制周期乘以 `backoff_factor`（默认 0.5），也就是逐级 50% 指数退避，直到 MSPT 恢复或降到最低产率。
+
+默认最低产率 `min_rate_per_second = 16`，即 **57,600 个/小时**。即使服务器持续处于压力状态，也不会把机器彻底关停。默认 `burst_capacity = 32` 的令牌桶用于吸收短时间突发。
+
+恢复速度刻意慢于退避：MSPT 必须连续 `recovery_stable_intervals = 5` 个控制周期低于 `recovery_mspt_threshold = 45 ms`，允许产率才乘以 `recovery_factor = 2` 放宽一级。当下一档已经足以满足机器实际生成需求时，直接解除限速。
+
+控制器按**维度**独立工作，因此末地失控刷沙机不会占用主世界的产率额度。生成尝试会在被拒绝前计数，因此即使处于限速状态，也能估计机器原本的真实需求。PAPI/Spark 不会在每个 ActorSpawnEvent 中查询，而是每个控制周期查询一次；MSPT 数据短暂不可用时不会新建限速，已有的限速保持当前档位等待反馈恢复。
+
+自适应限产不会删除已经存在的 falling_block，只会在限速期间拒绝超出允许产率的新生成。
+
 
 自动定时清理依赖 `papi` 与 `spark`。两者缺失、PAPI 服务未激活、Spark expansion 未注册、占位符尚无可用样本或返回值无法解析时，自动清理会直接跳过，不会在性能数据未知时删除实体。`/ecl clean`、`/ecl clean item`、`/ecl clean entity` 属于管理员手动操作，不受 MSPT 门控限制。
 
