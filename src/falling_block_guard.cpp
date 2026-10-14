@@ -1,4 +1,5 @@
 #include "falling_block_guard.h"
+#include "falling_block_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -288,6 +289,7 @@ void FallingBlockGuard::onActorSpawn(endstone::ActorSpawnEvent &event)
 
     if (!state.throttled) {
         ++state.accepted;
+        ++state.accepted_total;
         return;
     }
 
@@ -295,10 +297,12 @@ void FallingBlockGuard::onActorSpawn(endstone::ActorSpawnEvent &event)
     if (state.tokens >= 1.0) {
         state.tokens -= 1.0;
         ++state.accepted;
+        ++state.accepted_total;
         return;
     }
 
     ++state.rejected;
+    ++state.rejected_total;
     event.cancel();
 }
 
@@ -331,6 +335,7 @@ void FallingBlockGuard::setThrottle(
 
     if (changed) {
         logAdjustment(dimension, state, mspt, attempted_rate, reason);
+        state.last_diagnostic = now;
     }
 }
 
@@ -352,6 +357,7 @@ void FallingBlockGuard::clearThrottle(
     state.last_refill = Clock::now();
 
     logAdjustment(dimension, state, mspt, attempted_rate, "recovered");
+    state.last_diagnostic = state.last_refill;
 }
 
 void FallingBlockGuard::logAdjustment(
@@ -376,7 +382,11 @@ void FallingBlockGuard::logAdjustment(
         + " attempted_rate=" + std::to_string(attempted_rate) + "/s"
         + " allowed_rate=" + allowed + "/s"
         + " floor=" + std::to_string(min_rate_per_second_) + "/s"
+        + " attempted_last_interval=" + std::to_string(state.attempted)
+        + " accepted_last_interval=" + std::to_string(state.accepted)
         + " rejected_last_interval=" + std::to_string(state.rejected)
+        + " accepted_total=" + std::to_string(state.accepted_total)
+        + " rejected_total=" + std::to_string(state.rejected_total)
     );
 }
 
@@ -411,17 +421,18 @@ void FallingBlockGuard::controlTick()
 
         if (mspt.has_value()) {
             if (*mspt >= pressure_mspt_threshold_) {
-                if (state.throttled || attempted_rate >= activation_rate_per_second_) {
-                    const double next_rate = state.throttled
-                                                 ? state.allowed_rate_per_second * backoff_factor_
-                                                 : attempted_rate * backoff_factor_;
+                const auto action = ecleaner::falling_block::pressureAction(
+                    state.throttled, state.attempted, state.rejected,
+                    attempted_rate, state.allowed_rate_per_second, activation_rate_per_second_
+                );
+                if (action != ecleaner::falling_block::PressureAction::Hold) {
+                    const bool entering = action == ecleaner::falling_block::PressureAction::Enter;
+                    const double next_rate = entering
+                                                 ? attempted_rate * backoff_factor_
+                                                 : state.allowed_rate_per_second * backoff_factor_;
                     setThrottle(
-                        *dimension,
-                        state,
-                        next_rate,
-                        *mspt,
-                        attempted_rate,
-                        state.throttled ? "pressure_backoff" : "pressure_enter"
+                        *dimension, state, next_rate, *mspt, attempted_rate,
+                        entering ? "pressure_enter" : "pressure_backoff"
                     );
                 }
                 else {
@@ -461,6 +472,16 @@ void FallingBlockGuard::controlTick()
             // the existing limit avoids oscillating open/closed when PAPI is briefly
             // unavailable, while startup remains unrestricted until a valid sample exists.
             state.recovery_streak = 0;
+        }
+
+        // At the rate floor there is no adjustment to log. Report actual
+        // rejections at most once per ten seconds while throttled.
+        if (log_adjustments_ && state.throttled && state.rejected > 0
+            && (state.last_diagnostic.time_since_epoch().count() == 0
+                || now - state.last_diagnostic >= std::chrono::seconds(10))) {
+            logAdjustment(*dimension, state, mspt.value_or(0.0), attempted_rate,
+                          "throttle_activity");
+            state.last_diagnostic = now;
         }
 
         state.attempted = 0;
