@@ -30,6 +30,8 @@ private:
         std::uint64_t attempted{};
         std::uint64_t accepted{};
         std::uint64_t rejected{};
+        std::uint64_t accepted_total{};
+        std::uint64_t rejected_total{};
 
         bool throttled{false};
         double allowed_rate_per_second{};
@@ -38,6 +40,7 @@ private:
 
         std::chrono::steady_clock::time_point last_refill{};
         std::chrono::steady_clock::time_point last_control{};
+        std::chrono::steady_clock::time_point last_diagnostic{};
 
         double last_attempt_rate{};
         double last_accepted_rate{};

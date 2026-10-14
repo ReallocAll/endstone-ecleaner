@@ -67,6 +67,10 @@ if(BUILD_TESTING)
     target_include_directories(ecleaner_config_io_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
     target_link_libraries(ecleaner_config_io_test PRIVATE nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus)
     add_test(NAME config_io_round_trip COMMAND ecleaner_config_io_test)
+
+    add_executable(ecleaner_falling_block_policy_test tests/falling_block_policy_test.cpp)
+    target_include_directories(ecleaner_falling_block_policy_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME falling_block_pressure_policy COMMAND ecleaner_falling_block_policy_test)
 endif()
 
 find_package(Git QUIET)
@@ -111,7 +115,7 @@ else()
 endif()
 
 # 基础版本（主版本号）
-set(BASE_VERSION "0.3.3")
+set(BASE_VERSION "0.3.4")
 
 # 检查是否为正式发布版本
 if(RELEASE_VERSION)
