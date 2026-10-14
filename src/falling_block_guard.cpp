@@ -476,10 +476,10 @@ void FallingBlockGuard::controlTick()
 
         // At the rate floor there is no adjustment to log. Report actual
         // rejections at most once per ten seconds while throttled.
-        if (log_adjustments_ && state.throttled && state.rejected > 0
+        if (log_adjustments_ && mspt.has_value() && state.throttled && state.rejected > 0
             && (state.last_diagnostic.time_since_epoch().count() == 0
                 || now - state.last_diagnostic >= std::chrono::seconds(10))) {
-            logAdjustment(*dimension, state, mspt.value_or(0.0), attempted_rate,
+            logAdjustment(*dimension, state, *mspt, attempted_rate,
                           "throttle_activity");
             state.last_diagnostic = now;
         }
