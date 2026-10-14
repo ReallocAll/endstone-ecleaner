@@ -11,6 +11,8 @@ concurrency:
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       publish_release:
@@ -33,6 +35,8 @@ on:
 jobs:
   build:
     name: Build on ${{ matrix.os }}
+    env:
+      RELEASE_BUILD: ${{ (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'release') }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -58,7 +62,7 @@ jobs:
       - name: Configure CMake (Linux)
         if: runner.os == 'Linux'
         run: |
-          if [ "${{ github.event.inputs.release_type }}" = "release" ]; then
+          if [ "$RELEASE_BUILD" = "true" ]; then
             cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DRELEASE_VERSION=1 \
                   -DCMAKE_C_COMPILER=clang-20 \
                   -DCMAKE_CXX_COMPILER=clang++-20 \
@@ -91,7 +95,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if ("${{ github.event.inputs.release_type }}" -eq "release") {
+          if ("$env:RELEASE_BUILD" -eq "true") {
             cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DRELEASE_VERSION=1 `
               -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
               -DVCPKG_TARGET_TRIPLET=x64-windows-static
@@ -139,7 +143,10 @@ jobs:
   release:
     name: Publish Release
     needs: build
-    if: ${{ github.event.inputs.publish_release == 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) }}
+    env:
+      RELEASE_BUILD: ${{ (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'release') }}
+      RELEASE_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -153,7 +160,14 @@ jobs:
           # 从 CMakeLists.txt 中提取基础版本号
           BASE_VERSION=$(grep -o 'set(BASE_VERSION "[^"]*")' CMakeLists.txt | cut -d'"' -f2)
 
-          if [ "${{ github.event.inputs.release_type }}" = "release" ]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if [[ "$RELEASE_COMMIT_MESSAGE" != "release: v${BASE_VERSION}"* ]]; then
+              echo "Release commit version does not match CMakeLists.txt" >&2
+              exit 1
+            fi
+          fi
+
+          if [ "$RELEASE_BUILD" = "true" ]; then
             # 正式发布版本
             PROJECT_VERSION="${BASE_VERSION}"
             TAG_VERSION="v${BASE_VERSION}"
