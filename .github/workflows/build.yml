@@ -36,7 +36,7 @@ jobs:
   build:
     name: Build on ${{ matrix.os }}
     env:
-      RELEASE_BUILD: ${{ (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'release') }}
+      RELEASE_BUILD: "${{ (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'release') }}"
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -143,9 +143,9 @@ jobs:
   release:
     name: Publish Release
     needs: build
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) }}
+    if: "${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) }}"
     env:
-      RELEASE_BUILD: ${{ (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'release') }}
+      RELEASE_BUILD: "${{ (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'release') }}"
       RELEASE_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
     runs-on: ubuntu-latest
     steps:
