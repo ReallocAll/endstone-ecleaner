@@ -30,6 +30,30 @@ struct CleanerConfig {
     std::unordered_set<std::string> item_clean_legacy_name_lookup;
     std::unordered_set<std::string> entity_clean_lookup;
 
+    // MSVC's unordered_set move construction may allocate its sentinel. Swap
+    // members directly so publication never invokes aggregate move construction.
+    friend void swap(CleanerConfig &left, CleanerConfig &right) noexcept
+    {
+        using std::swap;
+        swap(left.preserve_falling_blocks, right.preserve_falling_blocks);
+        swap(left.auto_item_clean, right.auto_item_clean);
+        swap(left.auto_entity_clean, right.auto_entity_clean);
+        swap(left.item_clean_whitelist, right.item_clean_whitelist);
+        left.item_clean_ids.swap(right.item_clean_ids);
+        left.item_clean_legacy_names.swap(right.item_clean_legacy_names);
+        swap(left.entity_clean_whitelist, right.entity_clean_whitelist);
+        left.entity_clean_list.swap(right.entity_clean_list);
+        swap(left.item_clean_interval_seconds, right.item_clean_interval_seconds);
+        swap(left.entity_clean_interval_seconds, right.entity_clean_interval_seconds);
+        swap(left.broadcast_cleanup_results, right.broadcast_cleanup_results);
+        swap(left.mspt_threshold, right.mspt_threshold);
+        left.mspt_window.swap(right.mspt_window);
+        left.mspt_statistic.swap(right.mspt_statistic);
+        left.item_clean_id_lookup.swap(right.item_clean_id_lookup);
+        left.item_clean_legacy_name_lookup.swap(right.item_clean_legacy_name_lookup);
+        left.entity_clean_lookup.swap(right.entity_clean_lookup);
+    }
+
     static CleanerConfig parse(const nlohmann::json &config)
     {
         CleanerConfig result;
