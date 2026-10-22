@@ -16,7 +16,7 @@ ECleaner 是一个面向 Endstone 的轻量实体清理插件。本分支从 0.2
 - 通过 Endstone PAPI 读取 Spark 占位符；PAPI/Spark 未就绪或 MSPT 数据不可用时自动清理会 fail-closed（跳过清理）。
 - 0.3.1 将 Chunk Entity Guard 改为“MSPT 压力阈值 + 无条件硬上限”两级保护：服务器健康时不受普通压力阈值限制，只有达到更高硬上限才强制熔断。
 - 高价值生物使用统一保护策略：默认保护村民、宠物、坐骑、悦灵、潜影贝等，也保护命名实体和带 `ecleaner_protect` scoreboard tag 的实体。受保护实体仍计入压力，但默认不会被自动删除。
-- 0.3.2 新增 `falling_block` 自适应限产：MSPT 健康时完全不限速，达到压力阈值后按指数退避降低刷沙机/重力方块机器产率，但不会低于配置的最低产量。
+- `falling_block` 守卫默认只监测压力与超预算数量，不再通过删除生成实体干扰机器；破坏性拒绝必须显式启用。
 - 0.3.3 将主配置改为 TOML。旧 `config.json` 不再读取，也不做迁移；没有 `config.toml` 时直接按当前默认值生成新配置。
 - 0.3.4 避免无生成请求或请求低于限额时持续退避，并补充允许/拒绝生成的诊断统计。
 
@@ -159,6 +159,7 @@ log_cooldown_seconds = 10
 
 [falling_block_guard]
 enabled = true
+mode = "monitor"
 control_interval_ticks = 20
 pressure_mspt_threshold = 50.0
 recovery_mspt_threshold = 45.0
@@ -231,20 +232,11 @@ MSPT 低于 50 ms 时，上述压力限制**不介入**。但无条件硬上限�
 
 ### Falling Block Guard
 
-Falling Block Guard 不是固定实体数量上限，而是一个基于 MSPT 的反馈限产控制器。它按维度统计 `minecraft:falling_block` 的生成尝试，并且每个控制周期只读取一次 Spark MSPT。
+默认 `mode = "monitor"`：继续统计按维度的生成需求、压力和令牌桶预算，但绝不取消生成。旧配置缺少 mode 时也迁移到监测模式。超预算用 `over_budget` 单独记录，不能把它称为已拒绝或已削减产量。监测模式不强制控制下落方块负载，过载时需通过机器自身控制停止或降速。
 
-当 MSPT 低于 `pressure_mspt_threshold`（默认 50 ms）时，刷沙机/重力方块机器**完全不限速**。当 MSPT 达到阈值，并且某维度的生成需求至少达到 `activation_rate_per_second`（默认 16/s）时，初始允许产率按 `backoff_factor`（默认 0.5）折减；之后仅在本周期确实有请求被拒绝，或生成需求超过当前限额时继续退避。没有生成请求或需求低于限额时，即使 MSPT 仍然很高也不再无意义地连续减半。
+明确配置 `mode = "reject"` 才会启用旧版破坏性拒绝。Endstone 的取消事件会 despawn 已加入世界的实体，不是暂停或重试，可能删除机器循环方块。最低配额不能保证机器继续运转；启动和重载会输出风险警告。
 
-默认最低产率 `min_rate_per_second = 16`，即 **57,600 个/小时**。即使服务器持续处于压力状态，也不会把机器彻底关停。默认 `burst_capacity = 32` 的令牌桶用于吸收短时间突发。
-
-恢复速度刻意慢于退避：MSPT 必须连续 `recovery_stable_intervals = 5` 个控制周期低于 `recovery_mspt_threshold = 45 ms`，允许产率才乘以 `recovery_factor = 2` 放宽一级。当下一档已经足以满足机器实际生成需求时，直接解除限速。
-
-控制器按**维度**独立工作，因此末地失控刷沙机不会占用主世界的产率额度。生成尝试会在被拒绝前计数，因此即使处于限速状态，也能估计机器原本的真实需求。PAPI/Spark 不会在每个 ActorSpawnEvent 中查询，而是每个控制周期查询一次；MSPT 数据短暂不可用时不会新建限速，已有的限速保持当前档位等待反馈恢复。
-
-自适应限产不会删除已经存在的 falling_block，只会在限速期间拒绝超出允许产率的新生成。调整日志新增本周期尝试、放行、拒绝次数和累计放行、拒绝次数；「放行」仅指未被此守卫拦截，不保证后续其他插件不会取消生成。保持固定限速期间若确有拒绝，也会定期输出诊断日志。
-
-
-自动定时清理依赖 `papi` 与 `spark`。两者缺失、PAPI 服务未激活、Spark expansion 未注册、占位符尚无可用样本或返回值无法解析时，自动清理会直接跳过，不会在性能数据未知时删除实体。`/ecl clean`、`/ecl clean item`、`/ecl clean entity` 属于管理员手动操作，不受 MSPT 门控限制。
+两种模式均保留原有压力阈值、激活需求、令牌桶、最低预算、退避和恢复迟滞。高 MSPT 下仅在需求超过预算时继续退避；缺少 MSPT 时不新增限制并保持现有计算预算。定时清理仍依赖 PAPI/Spark；手动命令绕过 MSPT 门控。更多依据与限制见文末“配置事务与刷沙机保护更新”。
 
 ## 命令
 
@@ -286,3 +278,17 @@ ECleaner 主配置现在只使用 `plugins/ecleaner/config.toml`。旧的 `confi
 
 语言文件仍然保持 JSON，位于 `plugins/ecleaner/language/`。
 
+
+## 配置事务与刷沙机保护更新
+
+`falling_block_guard.mode` 默认改为 `"monitor"`；旧配置缺少该字段时也迁移到监测模式。保留原有按维度的压力反馈、令牌桶和恢复迟滞，但不再取消下落方块生成。日志中的 `over_budget` 表示超出计算预算的数量，`rejected` 才是实际拒绝数量。监测模式不会强制降低下落方块负载；过载时需要通过机器自身控制停止或降速。
+
+原因：Endstone v0.11.0 的 ActorSpawnEvent 取消实现会在实体加入世界后调用 despawn，并不是暂停生产、延迟重试或恢复源方块。删除循环中的重力方块可能使刷沙机失效；即使保留每秒 16 个的最低配额，也不能保证机器继续运行。此更新不能恢复此前已丢失的方块。监测模式下通用实体清理也保留下落方块（包括白名单模式）；区块守卫仍只处理生物。
+
+只有明确接受破坏风险时，才设置 `mode = "reject"` 恢复旧版的超额拒绝行为；启动和重载会警告。它可能破坏刷沙机或普通重力方块结构。没有经过真实 BDS 机器复现，不能宣称实现了无损自动限速。reject 模式的最低预算不能作为机器正常运行的保证。
+
+依据：[Endstone 生成事件实现](https://github.com/EndstoneMC/endstone/blob/v0.11.0/src/endstone/runtime/bedrock_hooks/script_level_gameplay_handler.cpp)、[事件接口](https://github.com/EndstoneMC/endstone/blob/v0.11.0/include/endstone/event/actor/actor_spawn_event.h)、[基岩版 MCPE-185621 报告](https://bugs.mojang.com/browse/MCPE/issues/MCPE-185621)。报告说明活塞、传送门与重力方块的耦合机制，不代表已复现本服务器的问题。
+
+配置重载和表单保存先完整验证核心配置、删除集合、语言和两个守卫，再在主线程发布。失败不改变原有策略、守卫运行状态或任务周期；成功重载仍按原逻辑重新调度。文件先完整序列化并重新解析验证，再写同目录独占临时文件、刷新、关闭和原子替换。不支持的嵌套数组或表数组在打开输出前拒绝，保留旧文件；不承诺断电后的目录持久化。
+
+清理选择每轮构建一次区块/类型索引，单区块触发只访问对应候选，3×3 触发最多查九个区块。保持同 tick 执行、保护谓词和 runtime ID 去重。预期复杂度为 O(N + T + 匹配访问数)，不是固定耗时预算；重叠触发仍可能重复访问匹配实体。

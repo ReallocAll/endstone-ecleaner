@@ -27,19 +27,6 @@ extern const std::string config_path;
 extern std::shared_ptr<endstone::Task> item_clean_task;
 extern std::shared_ptr<endstone::Task> entity_clean_task;
 
-extern bool auto_item_clean;
-extern bool auto_entity_clean;
-extern bool item_clean_whitelist;
-extern std::vector<std::string> item_clean_ids;
-extern std::vector<std::string> item_clean_legacy_names;
-extern bool entity_clean_whitelist;
-extern std::vector<std::string> entity_clean_list;
-extern int item_clean_interval_seconds;
-extern int entity_clean_interval_seconds;
-extern bool broadcast_cleanup_results;
-extern double mspt_threshold;
-extern std::string mspt_window;
-extern std::string mspt_statistic;
 
 class ECleaner : public endstone::Plugin {
 public:
@@ -71,6 +58,8 @@ public:
     void ecl_main_menu(endstone::Player &player);
 
 private:
+    friend struct ConfigTestAccess;
+    void apply_config(json config, bool save);
     std::unique_ptr<ChunkEntityGuard> chunk_entity_guard_;
     std::unique_ptr<FallingBlockGuard> falling_block_guard_;
 };

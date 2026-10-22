@@ -4,6 +4,12 @@
 
 namespace ecleaner::falling_block {
 
+// Spawn cancellation is destructive, so an explicit opt-in is mandatory.
+[[nodiscard]] inline bool shouldRejectSpawn(bool reject_mode, bool throttled, double tokens)
+{
+    return reject_mode && throttled && tokens < 1.0;
+}
+
 enum class PressureAction {
     Hold,
     Enter,

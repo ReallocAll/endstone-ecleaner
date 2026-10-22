@@ -3,6 +3,21 @@
 #include <toml++/toml.hpp>
 
 #include <cstdint>
+#include <atomic>
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <system_error>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -188,16 +203,89 @@ void writeTomlFile(const std::string &path, const json &value)
         throw std::runtime_error("ECleaner root config must be a TOML table");
     }
 
-    std::ofstream out(path, std::ios::trunc);
-    if (!out.is_open()) {
-        throw std::runtime_error("failed to open TOML config file for writing");
-    }
-
+    // Serialization and syntax validation must finish before opening any output.
+    std::ostringstream out;
     writeScalarEntries(out, value);
     writeTables(out, value, {});
+    const auto bytes = out.str();
+    const auto parsed = toml::parse(bytes);
+    if (nodeToJson(parsed) != value) {
+        throw std::runtime_error("TOML serialization would change configuration values");
+    }
 
-    if (!out.good()) {
-        throw std::runtime_error("failed while writing TOML config file");
+    const std::filesystem::path destination(path);
+    static std::atomic<std::uint64_t> sequence{0};
+    std::filesystem::path temporary;
+#ifdef _WIN32
+    HANDLE file = INVALID_HANDLE_VALUE;
+#else
+    int file = -1;
+#endif
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        temporary = destination;
+        temporary += ".tmp." + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count())
+            + "." + std::to_string(sequence.fetch_add(1));
+#ifdef _WIN32
+        file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) break;
+        if (GetLastError() != ERROR_FILE_EXISTS && GetLastError() != ERROR_ALREADY_EXISTS)
+            throw std::runtime_error("failed to create temporary TOML config");
+#else
+        file = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (file != -1) break;
+        if (errno != EEXIST)
+            throw std::system_error(errno, std::generic_category(), "create temporary TOML config");
+#endif
+    }
+#ifdef _WIN32
+    if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("temporary TOML filename collision");
+#else
+    if (file == -1) throw std::runtime_error("temporary TOML filename collision");
+#endif
+    try {
+        std::size_t offset = 0;
+        while (offset < bytes.size()) {
+#ifdef _WIN32
+            DWORD written = 0;
+            const auto count = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, 1 << 20));
+            if (!WriteFile(file, bytes.data() + offset, count, &written, nullptr) || written == 0)
+                throw std::runtime_error("failed to write temporary TOML config");
+#else
+            const auto written = ::write(file, bytes.data() + offset, bytes.size() - offset);
+            if (written < 0 && errno == EINTR) continue;
+            if (written <= 0)
+                throw std::system_error(errno, std::generic_category(), "write temporary TOML config");
+#endif
+            offset += static_cast<std::size_t>(written);
+        }
+#ifdef _WIN32
+        if (!FlushFileBuffers(file)) throw std::runtime_error("failed to flush temporary TOML config");
+        const bool closed = CloseHandle(file);
+        file = INVALID_HANDLE_VALUE;
+        if (!closed) throw std::runtime_error("failed to close temporary TOML config");
+        if (!MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            throw std::runtime_error("failed to replace TOML config");
+#else
+        if (::fsync(file) != 0)
+            throw std::system_error(errno, std::generic_category(), "flush temporary TOML config");
+        const int closed = ::close(file);
+        file = -1;
+        if (closed != 0)
+            throw std::system_error(errno, std::generic_category(), "close temporary TOML config");
+        std::filesystem::rename(temporary, destination);
+#endif
+    }
+    catch (...) {
+#ifdef _WIN32
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+#else
+        if (file != -1) ::close(file);
+#endif
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        throw;
     }
 }
 

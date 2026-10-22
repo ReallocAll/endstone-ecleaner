@@ -1,4 +1,5 @@
 #include "chunk_entity_guard.h"
+#include "chunk_snapshot_index.h"
 
 #include <algorithm>
 #include <chrono>
@@ -398,6 +399,34 @@ void ChunkEntityGuard::configure(const nlohmann::json &root)
         }
     }
 
+    pressure_active_ = false;
+    last_mspt_.reset();
+    chunk_counts_.clear();
+    actor_states_.clear();
+}
+
+void ChunkEntityGuard::publishConfiguration(ChunkEntityGuard &prepared) noexcept
+{
+    using std::swap;
+    swap(enabled_, prepared.enabled_);
+    swap(reconcile_interval_ticks_, prepared.reconcile_interval_ticks_);
+    swap(pressure_mspt_threshold_, prepared.pressure_mspt_threshold_);
+    swap(pressure_cleanable_mob_limit_per_chunk_, prepared.pressure_cleanable_mob_limit_per_chunk_);
+    swap(hard_cleanable_mob_limit_per_chunk_, prepared.hard_cleanable_mob_limit_per_chunk_);
+    swap(pressure_total_mob_limit_per_chunk_, prepared.pressure_total_mob_limit_per_chunk_);
+    swap(hard_total_mob_limit_per_chunk_, prepared.hard_total_mob_limit_per_chunk_);
+    swap(pressure_cleanable_mob_limit_3x3_, prepared.pressure_cleanable_mob_limit_3x3_);
+    swap(hard_cleanable_mob_limit_3x3_, prepared.hard_cleanable_mob_limit_3x3_);
+    swap(emergency_delete_protected_mobs_, prepared.emergency_delete_protected_mobs_);
+    swap(log_triggers_, prepared.log_triggers_);
+    swap(log_cooldown_seconds_, prepared.log_cooldown_seconds_);
+    swap(protection_enabled_, prepared.protection_enabled_);
+    swap(protect_named_, prepared.protect_named_);
+    swap(protect_tag_, prepared.protect_tag_);
+    swap(pressure_type_limits_, prepared.pressure_type_limits_);
+    swap(hard_type_limits_, prepared.hard_type_limits_);
+    swap(cleanable_types_, prepared.cleanable_types_);
+    swap(protected_types_, prepared.protected_types_);
     pressure_active_ = false;
     last_mspt_.reset();
     chunk_counts_.clear();
@@ -1073,44 +1102,40 @@ void ChunkEntityGuard::applyTriggers(
 
     std::unordered_map<std::uint64_t, endstone::Actor *> victims;
 
+    const ecleaner::ChunkSnapshotIndex<ChunkKey, ChunkKeyHash, ActorRecord> index(records);
+
     for (const auto &trigger : triggers) {
         TriggerStats current;
         current.trigger = &trigger;
 
-        for (const auto &record : records) {
-            bool matches = false;
-            switch (trigger.kind) {
-            case TriggerKind::TypeLimit:
-                matches = record.chunk == trigger.center && record.type == trigger.type;
-                break;
-            case TriggerKind::ChunkCleanable:
-                matches = record.chunk == trigger.center && record.cleanable;
-                break;
-            case TriggerKind::ChunkTotal:
-                matches = record.chunk == trigger.center;
-                break;
-            case TriggerKind::AreaCleanable:
-                matches = record.cleanable
-                          && record.chunk.dimension == trigger.center.dimension
-                          && std::abs(record.chunk.x - trigger.center.x) <= 1
-                          && std::abs(record.chunk.z - trigger.center.z) <= 1;
-                break;
-            }
-
-            if (!matches || record.actor == nullptr) {
-                continue;
-            }
+        const auto visit = [&](const ActorRecord &record) {
+            if (record.actor == nullptr) return;
 
             ++current.candidates;
             const bool emergency = trigger.kind == TriggerKind::ChunkTotal;
             if (isProtected(*record.actor, emergency)) {
                 ++current.protected_count;
-                continue;
+                return;
             }
 
             const auto runtime_id = record.actor->getRuntimeId();
             current.eligible_ids.push_back(runtime_id);
             victims.emplace(runtime_id, record.actor);
+        };
+
+        const bool cleanable = trigger.kind == TriggerKind::ChunkCleanable
+                               || trigger.kind == TriggerKind::AreaCleanable;
+        const std::string *type = trigger.kind == TriggerKind::TypeLimit ? &trigger.type : nullptr;
+        if (trigger.kind == TriggerKind::AreaCleanable) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                for (int dz = -1; dz <= 1; ++dz) {
+                    index.visit({trigger.center.dimension, trigger.center.x + dx, trigger.center.z + dz},
+                                true, nullptr, visit);
+                }
+            }
+        }
+        else {
+            index.visit(trigger.center, cleanable, type, visit);
         }
 
         stats.push_back(std::move(current));

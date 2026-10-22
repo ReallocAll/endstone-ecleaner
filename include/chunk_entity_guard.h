@@ -23,6 +23,7 @@ public:
     static bool normalizeRootConfig(nlohmann::json &root);
 
     void configure(const nlohmann::json &root);
+    void publishConfiguration(ChunkEntityGuard &prepared) noexcept;
     void start();
     void reschedule();
     void stop();
@@ -30,6 +31,7 @@ public:
     [[nodiscard]] bool isProtected(const endstone::Actor &actor, bool emergency = false) const;
 
 private:
+    friend struct ConfigTestAccess;
     struct ChunkKey {
         endstone::Dimension *dimension{};
         int x{};

@@ -68,6 +68,15 @@ if(BUILD_TESTING)
     target_link_libraries(ecleaner_config_io_test PRIVATE nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus)
     add_test(NAME config_io_round_trip COMMAND ecleaner_config_io_test)
 
+    add_executable(ecleaner_config_transaction_test tests/config_transaction_test.cpp src/config_io.cpp src/chunk_entity_guard.cpp src/falling_block_guard.cpp)
+    target_include_directories(ecleaner_config_transaction_test PRIVATE ${CMAKE_SOURCE_DIR}/include ${endstone_papi_headers_SOURCE_DIR}/include "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(ecleaner_config_transaction_test PRIVATE endstone::endstone nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus fmt::fmt-header-only)
+    add_test(NAME config_transaction COMMAND ecleaner_config_transaction_test)
+
+    add_executable(ecleaner_chunk_snapshot_index_test tests/chunk_snapshot_index_test.cpp)
+    target_include_directories(ecleaner_chunk_snapshot_index_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME chunk_snapshot_selection COMMAND ecleaner_chunk_snapshot_index_test)
+
     add_executable(ecleaner_falling_block_policy_test tests/falling_block_policy_test.cpp)
     target_include_directories(ecleaner_falling_block_policy_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME falling_block_pressure_policy COMMAND ecleaner_falling_block_policy_test)
@@ -115,7 +124,7 @@ else()
 endif()
 
 # 基础版本（主版本号）
-set(BASE_VERSION "0.3.4")
+set(BASE_VERSION "0.3.5")
 
 # 检查是否为正式发布版本
 if(RELEASE_VERSION)

@@ -16,7 +16,7 @@ ECleaner is a lightweight entity cleaner for Endstone. Starting with this fork's
 - MSPT is read from Spark through Endstone PAPI. If PAPI/Spark is unavailable or the MSPT value is unresolved, automatic cleanup fails closed and skips deletion.
 - 0.3.1 adds an MSPT-aware Chunk Entity Guard with pressure limits plus unconditional hard safety caps for runaway mob reactors/farms.
 - A shared high-value entity protection policy preserves villagers, pets, mounts, allays, shulkers, named mobs, and actors tagged `ecleaner_protect` by default. Protected mobs still count toward pressure.
-- 0.3.2 adds adaptive `falling_block` throttling for sand/gravity-block dupers: production is unlimited while MSPT is healthy, then backs off exponentially under pressure without dropping below a configured production floor.
+- Falling-block protection defaults to non-destructive pressure monitoring; destructive spawn rejection requires explicit opt-in and can break gravity-block machines.
 - 0.3.3 switches the main configuration to TOML. `config.json` is no longer read or migrated; a missing `config.toml` is generated directly from current defaults.
 - 0.3.4 avoids repeated rate reductions when a dimension has no falling-block demand or is already within its allowance, and adds accepted/rejected spawn diagnostics.
 
@@ -159,6 +159,7 @@ log_cooldown_seconds = 10
 
 [falling_block_guard]
 enabled = true
+mode = "monitor"
 control_interval_ticks = 20
 pressure_mspt_threshold = 50.0
 recovery_mspt_threshold = 45.0
@@ -221,17 +222,28 @@ Trigger logs identify whether the event was `pressure` or `hard` and include the
 
 ### Falling Block Guard
 
-The falling-block guard is a feedback rate controller rather than a static entity-count limiter. It watches `minecraft:falling_block` spawn attempts per dimension and samples the configured Spark MSPT statistic once per control interval.
+`falling_block_guard.mode` now defaults to `"monitor"`, including configs from older versions that omit this setting. Monitor mode measures pressure and computes the same token-bucket budget, but **never cancels falling-block spawns**. Logs distinguish actual accepted/rejected counts from `over_budget` counts (spawns that would have been rejected). It does not provide an enforced falling-block resource limit. Turn off or slow an overloaded machine through its own controls.
 
-While MSPT is below `pressure_mspt_threshold` (default 50 ms), falling-block production is unrestricted. When MSPT reaches the pressure threshold and a dimension is producing at least `activation_rate_per_second` (default 16/s), the initial allowance is calculated using `backoff_factor` (default 0.5). Further backoff is applied only while there are rejected spawn attempts or demand exceeds the current allowance; sustained high MSPT by itself no longer cuts the rate while the dimension is idle or under budget.
+This is intentional: Endstone's spawn cancellation despawns an actor that has already been added to the level. It is not a pause/retry or source-block rollback. Discarding a gravity block can remove a sand duper's circulating block, so even a positive minimum rate cannot guarantee continued machine operation. Monitoring cannot restore blocks already lost. Generic entity cleanup also preserves falling blocks in monitor mode, even with entity whitelist mode; the chunk guard continues to apply only to mobs.
 
-The default floor is `min_rate_per_second = 16`, equivalent to 57,600 falling blocks/hour. This preserves a useful baseline output instead of shutting gravity-block farms down completely. A token bucket with `burst_capacity = 32` smooths short bursts.
+Administrators who explicitly prefer destructive load shedding can set `mode = "reject"`. A warning is emitted on start/reload. This retains the previous behavior and can damage machines or ordinary falling-block constructions. There is no supported generic producer-pause API or spawn-cause information in the pinned Endstone API; ECleaner does not guess source blocks, rewrite pistons, or re-create canceled actors.
 
-Recovery is slower than backoff. MSPT must remain at or below `recovery_mspt_threshold` (default 45 ms) for `recovery_stable_intervals = 5` control intervals before the allowed rate is multiplied by `recovery_factor = 2`. Once the next recovery step can satisfy observed unconstrained demand, throttling is removed entirely.
+Both modes retain the per-dimension feedback controller: activate at the configured pressure MSPT and attempt rate, back off only when demand exceeds the allowance, refill a bounded token bucket, and recover after the configured low-MSPT streak. Missing MSPT introduces no new limit and holds the current calculated budget. Existing settings (`activation_rate_per_second`, `min_rate_per_second`, `burst_capacity`, backoff/recovery factors and intervals) remain valid. In monitor mode their budget is diagnostic, not a production-rate guarantee. Mob hard limits and other cleanup protections are unchanged.
 
-The controller is per dimension, so a runaway End sand duper does not spend the Overworld's allowance. Spawn attempts are counted before rejection, allowing the controller to estimate unconstrained demand while throttled. PAPI/Spark is never queried from the spawn callback; it is queried once per control interval. If MSPT becomes temporarily unavailable, no new throttle is introduced and an existing throttle holds its current rate until feedback returns.
+Research and limitations:
+- [Endstone v0.11.0 spawn hook](https://github.com/EndstoneMC/endstone/blob/v0.11.0/src/endstone/runtime/bedrock_hooks/script_level_gameplay_handler.cpp): cancellation invokes `despawn()` after `LevelAddedActorEvent`.
+- [Endstone spawn-event API](https://github.com/EndstoneMC/endstone/blob/v0.11.0/include/endstone/event/actor/actor_spawn_event.h): no spawn cause or resumable producer contract.
+- [Bedrock report MCPE-185621](https://bugs.mojang.com/browse/MCPE/issues/MCPE-185621): reports gravity-block machines moving blocks through portals/gateways with sticky pistons. This corroborates the state-sensitive mechanism, not this plugin's exact incident or all current machine designs.
 
-The adaptive path does not delete already-existing falling-block entities. It only rejects excess new spawns while throttled. Adjustment logs report per-interval attempts, accepted/rejected counts and cumulative accepted/rejected counts. "Accepted" means permitted by this guard, not necessarily spawned after other plugins run. Actual rejections are also logged periodically while throttled at an unchanged rate.
+No live BDS machine reproduction is claimed. Monitor mode prevents this plugin's destructive spawn cancellation; it is a safety mitigation, not lossless automatic machine throttling.
+
+### Configuration publication and selection
+
+Reload/form saves stage the complete core policy, deletion lookups, language resources and both guards before publishing on the main thread. Failed parsing, language validation, serialization or file replacement keeps the previous policy and runtime guard state. Missing language files retain the existing key-as-text fallback. Numeric normalization/clamping and legacy schema migration remain in place. Successful reloads retain the existing rescheduling/reset behavior.
+
+Writes serialize and reparse the entire TOML document before creating a same-directory exclusive temporary file, then flush, close and atomically replace the destination. Unsupported nested arrays/arrays of tables are rejected before touching the existing file. This preserves old bytes on ordinary save failures; it does not promise power-loss durability for the parent directory.
+
+Trigger selection builds one chunk/type index per reconciliation. A chunk trigger visits only its matching bucket; a 3x3 trigger visits at most nine cleanable buckets. Selection remains in the same tick, preserves candidate/protection semantics and deduplicates runtime IDs before removal. Expected cost is O(N + T + matching visits), rather than rescanning all N actors for each trigger; overlapping triggers still revisit matching candidates and this is not a fixed wall-clock tick budget.
 
 
 Scheduled cleanup depends on `papi` and `spark`. If either is missing, PAPI is inactive, the Spark expansion is not registered, the placeholder has no usable samples yet, or the returned value cannot be parsed, scheduled cleanup is skipped. Manual operator commands (`/ecl clean`, `/ecl clean item`, `/ecl clean entity`) bypass the MSPT gate.

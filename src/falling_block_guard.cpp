@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <stdexcept>
 #include <utility>
 
 namespace {
@@ -91,6 +92,7 @@ nlohmann::json FallingBlockGuard::defaultConfig()
 {
     return {
         {"enabled", true},
+        {"mode", "monitor"},
         {"control_interval_ticks", 20},
         {"pressure_mspt_threshold", 50.0},
         {"recovery_mspt_threshold", 45.0},
@@ -114,6 +116,14 @@ bool FallingBlockGuard::normalizeRootConfig(nlohmann::json &root)
     }
 
     auto &guard = root["falling_block_guard"];
+    if (!guard.contains("mode")) {
+        guard["mode"] = "monitor";
+        changed = true;
+    }
+    if (!guard["mode"].is_string()
+        || (guard["mode"] != "monitor" && guard["mode"] != "reject")) {
+        throw std::runtime_error("falling_block_guard.mode must be monitor or reject");
+    }
     normalizedBoolean(guard, "enabled", true, changed);
     normalizedInteger(guard, "control_interval_ticks", 20, 1, 1200, changed);
 
@@ -143,6 +153,7 @@ void FallingBlockGuard::configure(const nlohmann::json &root)
     const auto &guard = root.at("falling_block_guard");
 
     enabled_ = guard.value("enabled", true);
+    reject_spawns_ = guard.at("mode").get<std::string>() == "reject";
     control_interval_ticks_ = std::clamp(guard.value("control_interval_ticks", 20), 1, 1200);
 
     pressure_mspt_threshold_ =
@@ -167,6 +178,24 @@ void FallingBlockGuard::configure(const nlohmann::json &root)
 
     log_adjustments_ = guard.value("log_adjustments", true);
 
+    states_.clear();
+}
+
+void FallingBlockGuard::publishConfiguration(FallingBlockGuard &prepared) noexcept
+{
+    using std::swap;
+    swap(enabled_, prepared.enabled_);
+    swap(reject_spawns_, prepared.reject_spawns_);
+    swap(control_interval_ticks_, prepared.control_interval_ticks_);
+    swap(pressure_mspt_threshold_, prepared.pressure_mspt_threshold_);
+    swap(recovery_mspt_threshold_, prepared.recovery_mspt_threshold_);
+    swap(backoff_factor_, prepared.backoff_factor_);
+    swap(recovery_factor_, prepared.recovery_factor_);
+    swap(recovery_stable_intervals_, prepared.recovery_stable_intervals_);
+    swap(min_rate_per_second_, prepared.min_rate_per_second_);
+    swap(activation_rate_per_second_, prepared.activation_rate_per_second_);
+    swap(burst_capacity_, prepared.burst_capacity_);
+    swap(log_adjustments_, prepared.log_adjustments_);
     states_.clear();
 }
 
@@ -202,6 +231,12 @@ void FallingBlockGuard::start()
 
 void FallingBlockGuard::reschedule()
 {
+    if (enabled_ && reject_spawns_) {
+        plugin_.getLogger().warning(
+            "Falling block mode=reject explicitly enabled: rejected actors are despawned, "
+            "not delayed. This can destroy sand-duper cycle blocks and ordinary gravity blocks."
+        );
+    }
     if (control_task_) {
         control_task_->cancel();
         control_task_.reset();
@@ -301,9 +336,19 @@ void FallingBlockGuard::onActorSpawn(endstone::ActorSpawnEvent &event)
         return;
     }
 
-    ++state.rejected;
-    ++state.rejected_total;
-    event.cancel();
+    ++state.over_budget;
+    ++state.over_budget_total;
+    if (ecleaner::falling_block::shouldRejectSpawn(reject_spawns_, state.throttled, state.tokens)) {
+        ++state.rejected;
+        ++state.rejected_total;
+        event.cancel();
+    }
+    else {
+        // Endstone cancellation despawns the actor after it was added to the level.
+        // There is no supported source-block rollback or producer-pause contract.
+        ++state.accepted;
+        ++state.accepted_total;
+    }
 }
 
 void FallingBlockGuard::setThrottle(
@@ -377,6 +422,7 @@ void FallingBlockGuard::logAdjustment(
 
     plugin_.getLogger().warning(
         "Falling block throttle adjusted: dimension=" + dimension.getName()
+        + " mode=" + (reject_spawns_ ? "reject" : "monitor")
         + " reason=" + reason
         + " mspt=" + std::to_string(mspt)
         + " attempted_rate=" + std::to_string(attempted_rate) + "/s"
@@ -384,6 +430,8 @@ void FallingBlockGuard::logAdjustment(
         + " floor=" + std::to_string(min_rate_per_second_) + "/s"
         + " attempted_last_interval=" + std::to_string(state.attempted)
         + " accepted_last_interval=" + std::to_string(state.accepted)
+        + " over_budget_last_interval=" + std::to_string(state.over_budget)
+        + " over_budget_total=" + std::to_string(state.over_budget_total)
         + " rejected_last_interval=" + std::to_string(state.rejected)
         + " accepted_total=" + std::to_string(state.accepted_total)
         + " rejected_total=" + std::to_string(state.rejected_total)
@@ -422,7 +470,7 @@ void FallingBlockGuard::controlTick()
         if (mspt.has_value()) {
             if (*mspt >= pressure_mspt_threshold_) {
                 const auto action = ecleaner::falling_block::pressureAction(
-                    state.throttled, state.attempted, state.rejected,
+                    state.throttled, state.attempted, state.over_budget,
                     attempted_rate, state.allowed_rate_per_second, activation_rate_per_second_
                 );
                 if (action != ecleaner::falling_block::PressureAction::Hold) {
@@ -474,9 +522,9 @@ void FallingBlockGuard::controlTick()
             state.recovery_streak = 0;
         }
 
-        // At the rate floor there is no adjustment to log. Report actual
-        // rejections at most once per ten seconds while throttled.
-        if (log_adjustments_ && mspt.has_value() && state.throttled && state.rejected > 0
+        // At the rate floor there is no adjustment to log. Report over-budget
+        // demand at most once per ten seconds, including non-destructive monitoring.
+        if (log_adjustments_ && mspt.has_value() && state.throttled && state.over_budget > 0
             && (state.last_diagnostic.time_since_epoch().count() == 0
                 || now - state.last_diagnostic >= std::chrono::seconds(10))) {
             logAdjustment(*dimension, state, *mspt, attempted_rate,
@@ -487,5 +535,6 @@ void FallingBlockGuard::controlTick()
         state.attempted = 0;
         state.accepted = 0;
         state.rejected = 0;
+        state.over_budget = 0;
     }
 }

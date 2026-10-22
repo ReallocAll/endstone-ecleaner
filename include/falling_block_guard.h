@@ -21,15 +21,19 @@ public:
     static bool normalizeRootConfig(nlohmann::json &root);
 
     void configure(const nlohmann::json &root);
+    void publishConfiguration(FallingBlockGuard &prepared) noexcept;
     void start();
     void reschedule();
     void stop();
 
 private:
+    friend struct ConfigTestAccess;
     struct DimensionState {
         std::uint64_t attempted{};
         std::uint64_t accepted{};
         std::uint64_t rejected{};
+        std::uint64_t over_budget{};
+        std::uint64_t over_budget_total{};
         std::uint64_t accepted_total{};
         std::uint64_t rejected_total{};
 
@@ -63,6 +67,7 @@ private:
 
     bool started_{false};
     bool enabled_{true};
+    bool reject_spawns_{false};
     int control_interval_ticks_{20};
 
     double pressure_mspt_threshold_{50.0};

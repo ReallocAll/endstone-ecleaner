@@ -5,6 +5,7 @@
 
 #include "ecleaner.h"
 #include "config_io.h"
+#include "cleaner_config.h"
 #include "version.h"
 
 #include <endstone_papi/placeholder_api.h>
@@ -29,21 +30,9 @@ const std::string config_path = "plugins/ecleaner/config.toml";
 std::shared_ptr<endstone::Task> item_clean_task;
 std::shared_ptr<endstone::Task> entity_clean_task;
 
-bool auto_item_clean = true;
-bool auto_entity_clean = true;
-bool item_clean_whitelist = false;
-std::vector<std::string> item_clean_ids;
-std::vector<std::string> item_clean_legacy_names;
-bool entity_clean_whitelist = false;
-std::vector<std::string> entity_clean_list;
-int item_clean_interval_seconds = 10;
-int entity_clean_interval_seconds = 60;
-bool broadcast_cleanup_results = false;
-double mspt_threshold = 50.0;
-std::string mspt_window = "10s";
-std::string mspt_statistic = "p95";
-
 namespace {
+
+ecleaner::CleanerConfig live_config;
 
 const std::vector<std::string> kDefaultItemCleanIds = {
     "minecraft:netherrack",
@@ -83,10 +72,6 @@ const std::vector<std::string> kDefaultEntityCleanList = {
     "minecraft:zombified_piglin",
     "minecraft:phantom",
 };
-
-std::unordered_set<std::string> item_clean_id_lookup;
-std::unordered_set<std::string> item_clean_legacy_name_lookup;
-std::unordered_set<std::string> entity_clean_lookup;
 
 json make_default_config()
 {
@@ -161,21 +146,6 @@ bool normalize_config(json &config)
     }
 
     return changed;
-}
-
-void rebuild_lookup_sets()
-{
-    item_clean_id_lookup.clear();
-    item_clean_id_lookup.reserve(item_clean_ids.size());
-    item_clean_id_lookup.insert(item_clean_ids.begin(), item_clean_ids.end());
-
-    item_clean_legacy_name_lookup.clear();
-    item_clean_legacy_name_lookup.reserve(item_clean_legacy_names.size());
-    item_clean_legacy_name_lookup.insert(item_clean_legacy_names.begin(), item_clean_legacy_names.end());
-
-    entity_clean_lookup.clear();
-    entity_clean_lookup.reserve(entity_clean_list.size());
-    entity_clean_lookup.insert(entity_clean_list.begin(), entity_clean_list.end());
 }
 
 bool should_clean(bool whitelist_mode, bool listed)
@@ -276,19 +246,6 @@ void ECleaner::datafile_check() const
         catch (const std::exception &e) {
             getLogger().error(std::string("Failed to create ECleaner config: ") + e.what());
         }
-        return;
-    }
-
-    try {
-        json loaded_config = ecleaner::config::readTomlFile(config_path);
-
-        if (normalize_config(loaded_config)) {
-            ecleaner::config::writeTomlFile(config_path, loaded_config);
-            getLogger().info("Normalized ECleaner TOML config.");
-        }
-    }
-    catch (const std::exception &e) {
-        getLogger().error(std::string("Failed to validate ECleaner config: ") + e.what());
     }
 }
 
@@ -309,51 +266,51 @@ bool ECleaner::load_config()
     if (config.contains("error")) {
         return false;
     }
-
     try {
-        if (normalize_config(config)) {
-            ecleaner::config::writeTomlFile(config_path, config);
-            getLogger().info("Normalized ECleaner TOML config during reload.");
-        }
-        auto_item_clean = config.value("auto_item_clean", true);
-        auto_entity_clean = config.value("auto_entity_clean", true);
-
-        item_clean_whitelist = config.value("item_clean_whitelist", false);
-        entity_clean_whitelist = config.value("entity_clean_whitelist", false);
-
-        item_clean_ids = config.value("item_clean_ids", kDefaultItemCleanIds);
-        item_clean_legacy_names =
-            config.value("item_clean_legacy_names", std::vector<std::string>{});
-        entity_clean_list = config.value("entity_clean_list", kDefaultEntityCleanList);
-
-        item_clean_interval_seconds =
-            std::clamp(config.value("item_clean_interval_seconds", 10), 0, 3600);
-        entity_clean_interval_seconds =
-            std::clamp(config.value("entity_clean_interval_seconds", 60), 0, 3600);
-        broadcast_cleanup_results = config.value("broadcast_cleanup_results", false);
-        mspt_threshold = std::clamp(config.value("mspt_threshold", 50.0), 0.0, 10000.0);
-        mspt_window = config.value("mspt_window", std::string("10s"));
-        mspt_statistic = config.value("mspt_statistic", std::string("p95"));
-
-        rebuild_lookup_sets();
-        if (chunk_entity_guard_) {
-            chunk_entity_guard_->configure(config);
-        }
-        if (falling_block_guard_) {
-            falling_block_guard_->configure(config);
-        }
-
-        const std::string language = config.value("language", std::string("zh_CN"));
-        language_file = language_path + language + ".json";
-        Tran = translate(language_file);
-        Tran.loadLanguage();
-
+        apply_config(std::move(config), false);
         return true;
     }
     catch (const std::exception &e) {
         getLogger().error(std::string("Invalid ECleaner config: ") + e.what());
         return false;
     }
+}
+
+void ECleaner::apply_config(json config, bool save)
+{
+    const bool normalized = normalize_config(config);
+    auto next = ecleaner::CleanerConfig::parse(config);
+    const auto next_language_file = language_path + config.at("language").get<std::string>() + ".json";
+    translate next_translation(next_language_file);
+    // Missing language files retain the existing key-as-text fallback. Malformed files
+    // and non-string translations fail before any live policy or file is changed.
+    if (!next_translation.languageResource.is_null()) {
+        if (!next_translation.languageResource.is_object()) {
+            throw std::runtime_error("language resource must be an object");
+        }
+        for (const auto &value : next_translation.languageResource) {
+            if (!value.is_string()) {
+                throw std::runtime_error("language translations must be strings");
+            }
+        }
+    }
+    ChunkEntityGuard next_chunk(*this, [this]() { return query_mspt(); });
+    FallingBlockGuard next_falling(*this, [this]() { return query_mspt(); });
+    next_chunk.configure(config);
+    next_falling.configure(config);
+
+    if (save || normalized) {
+        ecleaner::config::writeTomlFile(config_path, config);
+    }
+    // Main-thread commit: no allocation, parsing, I/O or callbacks after this point.
+    // Keep the live guard objects, whose addresses are held by event callbacks.
+    using std::swap;
+    static_assert(std::is_nothrow_swappable_v<ecleaner::CleanerConfig>);
+    static_assert(std::is_nothrow_swappable_v<translate>);
+    swap(live_config, next);
+    swap(Tran, next_translation);
+    if (chunk_entity_guard_) chunk_entity_guard_->publishConfiguration(next_chunk);
+    if (falling_block_guard_) falling_block_guard_->publishConfiguration(next_falling);
 }
 
 int ECleaner::clean_item() const
@@ -369,12 +326,12 @@ int ECleaner::clean_item() const
         const auto stack = item->getItemStack();
         const std::string item_id = static_cast<std::string>(stack.getType().getId());
 
-        bool listed = item_clean_id_lookup.contains(item_id);
-        if (!listed && !item_clean_legacy_name_lookup.empty()) {
-            listed = item_clean_legacy_name_lookup.contains(actor->getName());
+        bool listed = live_config.item_clean_id_lookup.contains(item_id);
+        if (!listed && !live_config.item_clean_legacy_name_lookup.empty()) {
+            listed = live_config.item_clean_legacy_name_lookup.contains(actor->getName());
         }
 
-        if (should_clean(item_clean_whitelist, listed)) {
+        if (should_clean(live_config.item_clean_whitelist, listed)) {
             actor->remove();
             ++total_clean_num;
         }
@@ -403,8 +360,9 @@ int ECleaner::clean_entity() const
         }
 
         const std::string type = actor->getType();
-        const bool listed = entity_clean_lookup.contains(type);
-        if (should_clean(entity_clean_whitelist, listed)) {
+        if (live_config.preserve_falling_blocks && type == "minecraft:falling_block") continue;
+        const bool listed = live_config.entity_clean_lookup.contains(type);
+        if (should_clean(live_config.entity_clean_whitelist, listed)) {
             actor->remove();
             ++total_clean_num;
         }
@@ -423,14 +381,14 @@ std::optional<double> ECleaner::query_mspt() const
     }
 
     const std::string placeholder =
-        mspt_window == "1m" ? "{spark:tickduration_1m}" : "{spark:tickduration_10s}";
+        live_config.mspt_window == "1m" ? "{spark:tickduration_1m}" : "{spark:tickduration_10s}";
     const std::string resolved = api->setPlaceholders(nullptr, placeholder);
     if (resolved == placeholder) {
         return std::nullopt;
     }
 
     const auto values = parse_spark_mspt(resolved);
-    const auto index = mspt_statistic_index(mspt_statistic);
+    const auto index = mspt_statistic_index(live_config.mspt_statistic);
     if (!values || !index) {
         return std::nullopt;
     }
@@ -440,12 +398,12 @@ std::optional<double> ECleaner::query_mspt() const
 
 bool ECleaner::should_run_automatic_cleanup() const
 {
-    if (mspt_threshold <= 0.0) {
+    if (live_config.mspt_threshold <= 0.0) {
         return true;
     }
 
     const auto current_mspt = query_mspt();
-    return current_mspt.has_value() && *current_mspt >= mspt_threshold;
+    return current_mspt.has_value() && *current_mspt >= live_config.mspt_threshold;
 }
 
 void ECleaner::run_scheduled_item_clean() const
@@ -455,7 +413,7 @@ void ECleaner::run_scheduled_item_clean() const
     }
 
     const int cleaned = clean_item();
-    if (broadcast_cleanup_results && cleaned > 0) {
+    if (live_config.broadcast_cleanup_results && cleaned > 0) {
         getServer().broadcastMessage(
             "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of dropped items cleaned up: ")
             + std::to_string(cleaned)
@@ -470,7 +428,7 @@ void ECleaner::run_scheduled_entity_clean() const
     }
 
     const int cleaned = clean_entity();
-    if (broadcast_cleanup_results && cleaned > 0) {
+    if (live_config.broadcast_cleanup_results && cleaned > 0) {
         getServer().broadcastMessage(
             "§l§2[ECleaner] §r§e" + Tran.getLocal("Number of entities cleaned up: ")
             + std::to_string(cleaned)
@@ -489,8 +447,8 @@ void ECleaner::schedule_cleanup_tasks()
         entity_clean_task.reset();
     }
 
-    if (auto_item_clean && item_clean_interval_seconds > 0) {
-        const auto interval_ticks = static_cast<std::uint64_t>(item_clean_interval_seconds) * 20;
+    if (live_config.auto_item_clean && live_config.item_clean_interval_seconds > 0) {
+        const auto interval_ticks = static_cast<std::uint64_t>(live_config.item_clean_interval_seconds) * 20;
         item_clean_task = getServer().getScheduler().runTaskTimer(
             *this,
             [this]() { run_scheduled_item_clean(); },
@@ -499,8 +457,8 @@ void ECleaner::schedule_cleanup_tasks()
         );
     }
 
-    if (auto_entity_clean && entity_clean_interval_seconds > 0) {
-        const auto interval_ticks = static_cast<std::uint64_t>(entity_clean_interval_seconds) * 20;
+    if (live_config.auto_entity_clean && live_config.entity_clean_interval_seconds > 0) {
+        const auto interval_ticks = static_cast<std::uint64_t>(live_config.entity_clean_interval_seconds) * 20;
         entity_clean_task = getServer().getScheduler().runTaskTimer(
             *this,
             [this]() { run_scheduled_entity_clean(); },
@@ -522,14 +480,8 @@ void ECleaner::onEnable()
 
     if (!load_config()) {
         getLogger().warning("ECleaner config could not be loaded; using in-memory defaults.");
-        item_clean_ids = kDefaultItemCleanIds;
-        item_clean_legacy_names.clear();
-        entity_clean_list = kDefaultEntityCleanList;
-        rebuild_lookup_sets();
-
-        json defaults = make_default_config();
-        ChunkEntityGuard::normalizeRootConfig(defaults);
-        FallingBlockGuard::normalizeRootConfig(defaults);
+        auto defaults = make_default_config();
+        live_config = ecleaner::CleanerConfig::parse(defaults);
         chunk_entity_guard_->configure(defaults);
         falling_block_guard_->configure(defaults);
     }
@@ -541,7 +493,7 @@ void ECleaner::onEnable()
     auto papi_api = getServer().getServiceManager().load<papi::PlaceholderAPI>(
         std::string(papi::PlaceholderAPI::ServiceName)
     );
-    if (mspt_threshold > 0.0
+    if (live_config.mspt_threshold > 0.0
         && (!papi_api || !papi_api->isActive() || !papi_api->isRegistered("spark"))) {
         getLogger().warning(
             "MSPT guard is enabled, but PAPI/Spark data is unavailable. "
@@ -551,10 +503,10 @@ void ECleaner::onEnable()
 
     getLogger().info(
         "ECleaner " + getDescription().getVersion()
-        + " enabled: item interval=" + std::to_string(item_clean_interval_seconds)
-        + "s, entity interval=" + std::to_string(entity_clean_interval_seconds)
-        + "s, mspt guard=" + std::to_string(mspt_threshold)
-        + "ms (" + mspt_window + " " + mspt_statistic + ")"
+        + " enabled: item interval=" + std::to_string(live_config.item_clean_interval_seconds)
+        + "s, entity interval=" + std::to_string(live_config.entity_clean_interval_seconds)
+        + "s, mspt guard=" + std::to_string(live_config.mspt_threshold)
+        + "ms (" + live_config.mspt_window + " " + live_config.mspt_statistic + ")"
         + ", chunk entity guard=loaded, falling block guard=loaded."
     );
 }
@@ -624,10 +576,10 @@ bool ECleaner::onCommand(
         int item_count = 0;
         int entity_count = 0;
 
-        if (auto_item_clean) {
+        if (live_config.auto_item_clean) {
             item_count = clean_item();
         }
-        if (auto_entity_clean) {
+        if (live_config.auto_entity_clean) {
             entity_count = clean_entity();
         }
 
@@ -666,37 +618,37 @@ void ECleaner::ecl_main_menu(endstone::Player &player)
 
     endstone::Toggle auto_entity;
     auto_entity.setLabel(Tran.getLocal("Auto clean entity"));
-    auto_entity.setDefaultValue(auto_entity_clean);
+    auto_entity.setDefaultValue(live_config.auto_entity_clean);
 
     endstone::Toggle auto_item;
     auto_item.setLabel(Tran.getLocal("Auto clean item"));
-    auto_item.setDefaultValue(auto_item_clean);
+    auto_item.setDefaultValue(live_config.auto_item_clean);
 
     endstone::Toggle entity_whitelist;
     entity_whitelist.setLabel(Tran.getLocal("Entity whitelist mode"));
-    entity_whitelist.setDefaultValue(entity_clean_whitelist);
+    entity_whitelist.setDefaultValue(live_config.entity_clean_whitelist);
 
     endstone::Toggle item_whitelist;
     item_whitelist.setLabel(Tran.getLocal("Item whitelist mode"));
-    item_whitelist.setDefaultValue(item_clean_whitelist);
+    item_whitelist.setDefaultValue(live_config.item_clean_whitelist);
 
     endstone::Slider item_interval;
     item_interval.setLabel(Tran.getLocal("Item cleanup interval (seconds)"));
     item_interval.setMin(0);
     item_interval.setMax(300);
     item_interval.setStep(5);
-    item_interval.setDefaultValue(static_cast<float>(item_clean_interval_seconds));
+    item_interval.setDefaultValue(static_cast<float>(live_config.item_clean_interval_seconds));
 
     endstone::Slider entity_interval;
     entity_interval.setLabel(Tran.getLocal("Entity cleanup interval (seconds)"));
     entity_interval.setMin(0);
     entity_interval.setMax(600);
     entity_interval.setStep(10);
-    entity_interval.setDefaultValue(static_cast<float>(entity_clean_interval_seconds));
+    entity_interval.setDefaultValue(static_cast<float>(live_config.entity_clean_interval_seconds));
 
     endstone::Toggle broadcast_results;
     broadcast_results.setLabel(Tran.getLocal("Broadcast scheduled cleanup results"));
-    broadcast_results.setDefaultValue(broadcast_cleanup_results);
+    broadcast_results.setDefaultValue(live_config.broadcast_cleanup_results);
 
     menu.setControls({
         auto_entity,
@@ -717,23 +669,17 @@ void ECleaner::ecl_main_menu(endstone::Player &player)
                 return;
             }
 
-            auto_entity_clean = values.at(0).get<bool>();
-            auto_item_clean = values.at(1).get<bool>();
-            entity_clean_whitelist = values.at(2).get<bool>();
-            item_clean_whitelist = values.at(3).get<bool>();
-            item_clean_interval_seconds = std::clamp(values.at(4).get<int>(), 0, 3600);
-            entity_clean_interval_seconds = std::clamp(values.at(5).get<int>(), 0, 3600);
-            broadcast_cleanup_results = values.at(6).get<bool>();
-
-            config["auto_entity_clean"] = auto_entity_clean;
-            config["auto_item_clean"] = auto_item_clean;
-            config["entity_clean_whitelist"] = entity_clean_whitelist;
-            config["item_clean_whitelist"] = item_clean_whitelist;
-            config["item_clean_interval_seconds"] = item_clean_interval_seconds;
-            config["entity_clean_interval_seconds"] = entity_clean_interval_seconds;
-            config["broadcast_cleanup_results"] = broadcast_cleanup_results;
-            ecleaner::config::writeTomlFile(config_path, config);
+            config["auto_entity_clean"] = values.at(0).get<bool>();
+            config["auto_item_clean"] = values.at(1).get<bool>();
+            config["entity_clean_whitelist"] = values.at(2).get<bool>();
+            config["item_clean_whitelist"] = values.at(3).get<bool>();
+            config["item_clean_interval_seconds"] = values.at(4).get<int>();
+            config["entity_clean_interval_seconds"] = values.at(5).get<int>();
+            config["broadcast_cleanup_results"] = values.at(6).get<bool>();
+            apply_config(std::move(config), true);
             schedule_cleanup_tasks();
+            if (chunk_entity_guard_) chunk_entity_guard_->reschedule();
+            if (falling_block_guard_) falling_block_guard_->reschedule();
 
             p->sendMessage(Tran.getLocal("Config file update over"));
         }

@@ -214,6 +214,7 @@ jobs:
               PLUGIN_PATH=$(find artifacts/ecleaner-windows-plugin -name "endstone_ecleaner.dll" | head -n 1)
               EXT=dll
             fi
+            cp "$PLUGIN_PATH" "artifacts/endstone_ecleaner.${EXT}"
             BUILD_DIR=package
             mkdir -p ${BUILD_DIR}/ecleaner/language
             cp "$PLUGIN_PATH" ${BUILD_DIR}/endstone_ecleaner.${EXT}
@@ -230,9 +231,19 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.get_version.outputs.TAG_VERSION }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.get_version.outputs.RELEASE_TITLE }}
           draft: false
           prerelease: ${{ github.event.inputs.release_type == 'development' }}
-          files: artifacts/*.zip
+          body: |
+            Configuration reload/save now stages complete deletion policies and guard settings; failed writes preserve the existing TOML file. Chunk selection uses a per-snapshot chunk/type index.
+
+            Falling-block protection now defaults to non-destructive `mode = "monitor"`, including existing configs without a mode field. It reports pressure but does not enforce a falling-block rate limit. Explicit `mode = "reject"` retains destructive cancellation and can break sand/gravity-block machines. This update does not restore lost blocks or claim lossless machine throttling. See the README for migration details and source evidence.
+
+            Linux and Windows builds plus regression tests run for this exact commit before publication. Live BDS machine behavior is not covered by these tests.
+          files: |
+            artifacts/*.zip
+            artifacts/*.so
+            artifacts/*.dll
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
